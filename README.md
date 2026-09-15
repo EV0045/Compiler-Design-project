@@ -17,13 +17,3 @@ cd build
 cmake ..
 make
 ```
-
-## Run Member 3 integrated pipeline
-```bash
-./member3_pipeline <input.ll> <config.json>
-```
-
-## Notes
-Member 3's StoreInst fix separates secret memory contents from secret-dependent memory addresses. A SECRET value stored to public memory taints the memory contents; it does not automatically make the destination pointer SECRET.
-
-The transformer files are included from the submitted project. Their implementation was not fabricated or replaced here.
