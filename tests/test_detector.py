@@ -406,5 +406,292 @@ class TestViolationDetector(unittest.TestCase):
         self.assertEqual(violations[0].instruction.name, "exit_br")
 
 
+class MockTaintEngine:
+    """
+    Python mirror of ct_pass::TaintEngine.
+    Simulates the propagated taint map that Member 3's engine produces
+    after running fixed-point analysis over a function's CFG.
+
+    The real TaintEngine propagates taint through:
+      - BinaryOperator  (e.g., secret & 1  -> secret)
+      - CmpInst         (e.g., icmp secret -> secret)
+      - CastInst        (e.g., zext secret -> secret)
+      - PHINode         (any incoming SECRET -> result is SECRET)
+      - GEP             (secret base or index -> result is SECRET)
+      - LoadInst        (secret pointer -> result is SECRET)
+
+    Here we pre-build the propagated map manually to test the
+    ViolationDetector's behaviour when given engine output.
+    """
+    def __init__(self, propagated_map: Dict[str, TaintLabel]):
+        self._taint_map = propagated_map
+
+    def get_taint_map(self) -> Dict[str, TaintLabel]:
+        return self._taint_map
+
+    def is_secret(self, name: str) -> bool:
+        return self._taint_map.get(name, TaintLabel.PUBLIC) == TaintLabel.SECRET
+
+
+class TestDetectorTaintEngineIntegration(unittest.TestCase):
+    """
+    Week 2 Integration Tests.
+
+    Each test simulates the full Member 3 → Member 2 pipeline:
+      1. TaintEngine produces a PropagatedTaintMap after fixed-point analysis.
+      2. ViolationDetector.detect_violations() consumes that map.
+      3. We assert the correct ViolationSite list is produced.
+
+    Taint propagation chains are hand-computed to mirror what
+    TaintEngine.processInstruction() would produce for each kernel.
+    """
+
+    def setUp(self):
+        self.detector = ViolationDetector()
+
+    def _make_engine(self, propagated: Dict[str, TaintLabel]) -> MockTaintEngine:
+        return MockTaintEngine(propagated)
+
+    # ------------------------------------------------------------------
+    # Test 1: Contract compatibility — engine output feeds detector directly
+    # ------------------------------------------------------------------
+    def test_taintengine_contract_compatibility(self):
+        """
+        The map returned by TaintEngine.get_taint_map() must be usable
+        directly as the taint_map argument to detect_violations().
+        No type adaptation should be needed.
+        """
+        engine = self._make_engine({
+            "key":      TaintLabel.SECRET,
+            "pub_addr": TaintLabel.PUBLIC,
+        })
+
+        fn = MockFunction("compat_check")
+        bb = MockBasicBlock("entry")
+        secret_val = MockValue("key")
+        pub_addr   = MockValue("pub_addr")
+
+        bb.add_instruction(MockLoadInst("ld", ptr_operand=pub_addr))
+        fn.add_basic_block(bb)
+
+        # Feed engine map directly — no violations (load from public address)
+        violations = self.detector.detect_violations(fn, engine.get_taint_map())
+        self.assertEqual(len(violations), 0)
+
+    # ------------------------------------------------------------------
+    # Test 2: Propagation chain — param → icmp → br (memcmp pattern)
+    # ------------------------------------------------------------------
+    def test_propagated_taint_branch_chain(self):
+        """
+        Simulates TaintEngine propagation:
+          %secret_param (SECRET, from labeller)
+          %diff   = sub  %a[i], %b[i]    -> SECRET (operand is secret)
+          %cmp    = icmp %diff, 0         -> SECRET (operand is secret)
+          br %cmp, exit, loop             -> BRANCH_LEAK
+        """
+        # Propagated map: taint has flowed from param through sub and icmp
+        engine = self._make_engine({
+            "secret_param": TaintLabel.SECRET,
+            "diff":         TaintLabel.SECRET,   # sub result
+            "cmp":          TaintLabel.SECRET,   # icmp result
+        })
+
+        fn = MockFunction("memcmp_kernel")
+        bb = MockBasicBlock("loop_body")
+
+        cmp_val    = MockValue("cmp")
+        exit_br    = MockBranchInst("exit_br", condition=cmp_val, source_loc="memcmp.c:9:9")
+        bb.add_instruction(exit_br)
+        fn.add_basic_block(bb)
+
+        violations = self.detector.detect_violations(fn, engine.get_taint_map())
+        self.assertEqual(len(violations), 1)
+        self.assertEqual(violations[0].type, ViolationType.BRANCH_LEAK)
+        self.assertEqual(violations[0].leaking_operand.name, "cmp")
+        self.assertEqual(violations[0].source_loc, "memcmp.c:9:9")
+
+    # ------------------------------------------------------------------
+    # Test 3: Propagation chain — key_byte → GEP index (AES S-box pattern)
+    # ------------------------------------------------------------------
+    def test_propagated_taint_gep_index_chain(self):
+        """
+        Simulates TaintEngine propagation:
+          %key_byte  (SECRET, from labeller)
+          %idx       = zext %key_byte to i64  -> SECRET (cast propagates taint)
+          %sbox_addr = getelementptr sbox, %idx -> MEMORY_LEAK (secret index)
+          %sub_byte  = load %sbox_addr          -> MEMORY_LEAK (secret pointer)
+        """
+        engine = self._make_engine({
+            "key_byte":  TaintLabel.SECRET,
+            "idx":       TaintLabel.SECRET,   # zext result
+            "sbox_addr": TaintLabel.SECRET,   # GEP result
+            "AES_SBOX":  TaintLabel.PUBLIC,
+        })
+
+        fn  = MockFunction("aes_sbox_kernel")
+        bb  = MockBasicBlock("entry")
+
+        sbox    = MockValue("AES_SBOX")
+        idx     = MockValue("idx")
+        sbox_addr_val = MockValue("sbox_addr")
+
+        gep  = MockGetElementPtrInst("gep_sbox", base_ptr=sbox, indices=[idx],
+                                     source_loc="aes_sbox.c:18:14")
+        load = MockLoadInst("sub_byte", ptr_operand=sbox_addr_val,
+                            source_loc="aes_sbox.c:18:5")
+
+        bb.add_instruction(gep)
+        bb.add_instruction(load)
+        fn.add_basic_block(bb)
+
+        violations = self.detector.detect_violations(fn, engine.get_taint_map())
+
+        # Both GEP (secret index) and load (secret pointer) are violations
+        self.assertGreaterEqual(len(violations), 2)
+        types = [v.type for v in violations]
+        self.assertEqual(types.count(ViolationType.MEMORY_LEAK), 2)
+
+        gep_v  = next(v for v in violations if v.instruction.name == "gep_sbox")
+        load_v = next(v for v in violations if v.instruction.name == "sub_byte")
+        self.assertEqual(gep_v.leaking_operand.name,  "idx")
+        self.assertEqual(load_v.leaking_operand.name, "sbox_addr")
+
+    # ------------------------------------------------------------------
+    # Test 4: mod_exp exponent branching (square-and-multiply pattern)
+    # ------------------------------------------------------------------
+    def test_mod_exp_exponent_branch(self):
+        """
+        Simulates TaintEngine propagation for modular exponentiation:
+          %exp       (SECRET, secret exponent)
+          %bit       = and  %exp, 1      -> SECRET
+          %is_one    = icmp %bit, 1      -> SECRET
+          br %is_one, multiply, square   -> BRANCH_LEAK
+        """
+        engine = self._make_engine({
+            "exp":    TaintLabel.SECRET,
+            "bit":    TaintLabel.SECRET,   # and result
+            "is_one": TaintLabel.SECRET,   # icmp result
+        })
+
+        fn  = MockFunction("mod_exp_kernel")
+        bb  = MockBasicBlock("loop_body")
+
+        is_one_val = MockValue("is_one")
+        br_inst    = MockBranchInst("exp_br", condition=is_one_val,
+                                    source_loc="mod_exp.c:22:9")
+        bb.add_instruction(br_inst)
+        fn.add_basic_block(bb)
+
+        violations = self.detector.detect_violations(fn, engine.get_taint_map())
+        self.assertEqual(len(violations), 1)
+        self.assertEqual(violations[0].type, ViolationType.BRANCH_LEAK)
+        self.assertEqual(violations[0].instruction.name, "exp_br")
+        self.assertEqual(violations[0].source_loc, "mod_exp.c:22:9")
+
+    # ------------------------------------------------------------------
+    # Test 5: PHI node — secret value from one incoming edge taints result
+    # ------------------------------------------------------------------
+    def test_phi_node_taint_propagation_to_branch(self):
+        """
+        Simulates TaintEngine PHI node handling:
+          %phi = phi [%secret_val, %bb_secret], [%pub_val, %bb_pub]
+          -> TaintEngine marks %phi as SECRET (conservative: any SECRET incoming)
+          %cmp = icmp %phi, 0  -> SECRET
+          br %cmp, ...         -> BRANCH_LEAK
+
+        The PHI node itself is not inspected by ViolationDetector (it's not a
+        branch/load/store/GEP). The downstream branch that uses the PHI result is.
+        """
+        engine = self._make_engine({
+            "secret_val": TaintLabel.SECRET,
+            "pub_val":    TaintLabel.PUBLIC,
+            "phi":        TaintLabel.SECRET,   # PHI result: tainted by one SECRET input
+            "cmp":        TaintLabel.SECRET,   # icmp on tainted PHI
+        })
+
+        fn  = MockFunction("phi_test")
+        bb1 = MockBasicBlock("merge_block")
+
+        cmp_val = MockValue("cmp")
+        br_inst = MockBranchInst("phi_br", condition=cmp_val)
+        bb1.add_instruction(br_inst)
+        fn.add_basic_block(bb1)
+
+        violations = self.detector.detect_violations(fn, engine.get_taint_map())
+        self.assertEqual(len(violations), 1)
+        self.assertEqual(violations[0].type, ViolationType.BRANCH_LEAK)
+        self.assertEqual(violations[0].leaking_operand.name, "cmp")
+
+    # ------------------------------------------------------------------
+    # Test 6: Post-transformation — verifyZeroLeaks passes on clean IR
+    # ------------------------------------------------------------------
+    def test_verify_zero_leaks_after_transformation(self):
+        """
+        Simulates the state after Member 4's Transformer has rewritten the IR:
+          - Secret-dependent branch replaced with select instruction.
+          - All remaining instructions use only public addresses.
+        The post-transformation taint map no longer marks any address as SECRET.
+        verify_zero_leaks() must return True.
+        """
+        # Post-transform: 'cmp' is now used in a select, not a branch.
+        # No br, load, store, or GEP with secret operands remain.
+        engine = self._make_engine({
+            "secret_val": TaintLabel.SECRET,
+            "cmp":        TaintLabel.SECRET,   # still tainted, but no longer in a branch
+            "result":     TaintLabel.PUBLIC,
+        })
+
+        fn  = MockFunction("transformed_fn")
+        bb  = MockBasicBlock("entry")
+
+        # Only instruction is a public load — the branch has been eliminated
+        pub_ptr = MockValue("result")
+        bb.add_instruction(MockLoadInst("final_load", ptr_operand=pub_ptr))
+        fn.add_basic_block(bb)
+
+        ok, leaks = self.detector.verify_zero_leaks(fn, engine.get_taint_map())
+        self.assertTrue(ok, "Post-transformation function should have zero leaks")
+        self.assertEqual(len(leaks), 0)
+
+    # ------------------------------------------------------------------
+    # Test 7: Multi-block function — violations detected across all BBs
+    # ------------------------------------------------------------------
+    def test_multi_block_violations_detected(self):
+        """
+        Verifies that detect_violations scans ALL basic blocks, not just
+        the entry block. Simulates a function with separate entry, loop,
+        and exit blocks where the violation is in the loop block.
+        """
+        engine = self._make_engine({
+            "secret_idx": TaintLabel.SECRET,
+            "loop_cond":  TaintLabel.SECRET,
+        })
+
+        fn        = MockFunction("multi_block_fn")
+        bb_entry  = MockBasicBlock("entry")
+        bb_loop   = MockBasicBlock("loop")
+        bb_exit   = MockBasicBlock("exit")
+
+        # Entry block: public-only load (no violation)
+        bb_entry.add_instruction(MockLoadInst("pub_ld", ptr_operand=MockValue("pub_addr")))
+
+        # Loop block: secret-conditioned branch (violation)
+        loop_cond = MockValue("loop_cond")
+        bb_loop.add_instruction(MockBranchInst("loop_br", condition=loop_cond))
+
+        # Exit block: clean
+        bb_exit.add_instruction(MockLoadInst("exit_ld", ptr_operand=MockValue("result_ptr")))
+
+        fn.add_basic_block(bb_entry)
+        fn.add_basic_block(bb_loop)
+        fn.add_basic_block(bb_exit)
+
+        violations = self.detector.detect_violations(fn, engine.get_taint_map())
+        self.assertEqual(len(violations), 1)
+        self.assertEqual(violations[0].type, ViolationType.BRANCH_LEAK)
+        self.assertEqual(violations[0].instruction.name, "loop_br")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+

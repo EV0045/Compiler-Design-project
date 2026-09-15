@@ -12,6 +12,10 @@
 #include <unordered_map>
 #include <memory>
 
+// Forward declaration to avoid circular include:
+// TaintEngine.h already includes ViolationDetector.h.
+namespace ct_pass { class TaintEngine; }
+
 namespace ct_pass {
 
 /**
@@ -52,15 +56,19 @@ using TaintMap = std::unordered_map<const llvm::Value*, TaintLabel>;
 
 /**
  * @brief Member 2 (Thurya) - Violation Detector & Static Verifier
- * 
- * Week 1 Deliverable:
+ *
+ * Week 1 Deliverable (complete):
  *   - Instruction inspector to isolate and list target 'br' and 'load'/'store'/'gep'
  *     instructions across Basic Blocks.
- * 
- * Week 2 & 3 Deliverables:
- *   - Identify exact leak sites by evaluating operands against the PropagatedTaintMap.
- *   - Generate the formal Violation Sites List for the Transformer (Member 4).
- *   - Post-transformation static verification to ensure 0 remaining leaks.
+ *
+ * Week 2 Deliverable (complete):
+ *   - detectViolations() connected to Member 3 TaintEngine output.
+ *   - Convenience overloads accepting TaintEngine& directly.
+ *   - Generates the formal ViolationSite list for Member 4's Transformer.
+ *
+ * Week 3 Deliverable:
+ *   - Post-transformation static re-verification (verifyZeroLeaks) on
+ *     transformed binaries to confirm zero remaining leaks.
  */
 class ViolationDetector {
 public:
@@ -85,6 +93,20 @@ public:
      * @brief Analyze all non-declaration functions in a Module.
      */
     std::vector<ViolationSite> detectViolations(llvm::Module &M, const TaintMap &taintMap);
+
+    /**
+     * @brief Week 2 Integration: Convenience overload accepting TaintEngine directly.
+     * Extracts the propagated TaintMap from the engine and runs detectViolations.
+     * @param F The LLVM Function to inspect.
+     * @param engine The fully-analyzed TaintEngine from Member 3.
+     * @return List of detected ViolationSite structures.
+     */
+    std::vector<ViolationSite> detectViolations(llvm::Function &F, const TaintEngine &engine);
+
+    /**
+     * @brief Week 2 Integration: Module-level overload accepting TaintEngine directly.
+     */
+    std::vector<ViolationSite> detectViolations(llvm::Module &M, const TaintEngine &engine);
 
     /**
      * @brief Inspect a branch instruction.
@@ -117,7 +139,13 @@ public:
      * @param remainingLeaks Output vector to collect any remaining leaks.
      * @return true if 0 leaks exist (pass verification), false otherwise.
      */
-    bool verifyZeroLeaks(llvm::Function &F, const TaintMap &taintMap, 
+    bool verifyZeroLeaks(llvm::Function &F, const TaintMap &taintMap,
+                         std::vector<ViolationSite> &remainingLeaks);
+
+    /**
+     * @brief Week 2 Integration: verifyZeroLeaks overload accepting TaintEngine directly.
+     */
+    bool verifyZeroLeaks(llvm::Function &F, const TaintEngine &engine,
                          std::vector<ViolationSite> &remainingLeaks);
 
 private:

@@ -19,6 +19,10 @@ add_definitions(${LLVM_DEFINITIONS})
 
 add_library(ConstantTimePass MODULE
     src/PassRegistration.cpp
+    src/SecrecyLabeller.cpp
+    src/TaintEngine.cpp
+    src/ViolationDetector.cpp
+    src/ConstantTimeTransformer.cpp
 )
 
 target_include_directories(ConstantTimePass
