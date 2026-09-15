@@ -1,4 +1,5 @@
 #include "ViolationDetector.h"
+#include "TaintEngine.h"
 
 #include <llvm/IR/DebugInfoMetadata.h>
 #include <llvm/IR/DebugLoc.h>
@@ -222,11 +223,33 @@ std::vector<ViolationSite> ViolationDetector::detectViolations(llvm::Module &M,
     return allViolations;
 }
 
-bool ViolationDetector::verifyZeroLeaks(llvm::Function &F, 
-                                       const TaintMap &taintMap, 
+bool ViolationDetector::verifyZeroLeaks(llvm::Function &F,
+                                       const TaintMap &taintMap,
                                        std::vector<ViolationSite> &remainingLeaks) {
     remainingLeaks = detectViolations(F, taintMap);
     return remainingLeaks.empty();
+}
+
+// ---------------------------------------------------------------------------
+// Week 2 Integration: TaintEngine convenience overloads
+// These bridge Member 3's TaintEngine output directly into the detector,
+// so callers do not need to manually extract getTaintMap().
+// ---------------------------------------------------------------------------
+
+std::vector<ViolationSite>
+ViolationDetector::detectViolations(llvm::Function &F, const TaintEngine &engine) {
+    return detectViolations(F, engine.getTaintMap());
+}
+
+std::vector<ViolationSite>
+ViolationDetector::detectViolations(llvm::Module &M, const TaintEngine &engine) {
+    return detectViolations(M, engine.getTaintMap());
+}
+
+bool ViolationDetector::verifyZeroLeaks(llvm::Function &F,
+                                       const TaintEngine &engine,
+                                       std::vector<ViolationSite> &remainingLeaks) {
+    return verifyZeroLeaks(F, engine.getTaintMap(), remainingLeaks);
 }
 
 } // namespace ct_pass
