@@ -1,0 +1,10 @@
+{
+    "function": "mod_exp",
+    "secret_parameters": [
+        "secret_exp"
+    ],
+    "public_parameters": [
+        "base",
+        "mod"
+    ]
+}

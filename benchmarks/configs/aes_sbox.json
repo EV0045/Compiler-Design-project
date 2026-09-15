@@ -1,0 +1,7 @@
+{
+    "function": "aes_sbox",
+    "secret_parameters": [
+        "input"
+    ],
+    "public_parameters": []
+}

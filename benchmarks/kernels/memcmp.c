@@ -1,10 +1,14 @@
-int test_memcmp(const char *secret, const char *public_data, int n)
+#include <stddef.h>
+
+int secret_memcmp(const unsigned char *a, const unsigned char *b, int n)
 {
     for (int i = 0; i < n; i++)
     {
-        if (secret[i] != public_data[i])
-            return 0;
+        if (a[i] != b[i])
+        {
+            return 1;
+        }
     }
 
-    return 1;
+    return 0;
 }

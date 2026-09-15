@@ -1,0 +1,10 @@
+{
+    "function": "secret_memcmp",
+    "secret_parameters": [
+        "a",
+        "b"
+    ],
+    "public_parameters": [
+        "n"
+    ]
+}
