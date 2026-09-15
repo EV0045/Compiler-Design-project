@@ -1,0 +1,4 @@
+build/
+*.ll
+__pycache__/
+.DS_Store
