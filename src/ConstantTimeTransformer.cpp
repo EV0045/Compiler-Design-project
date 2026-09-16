@@ -238,7 +238,7 @@ bool ConstantTimeTransformer::transformMemory(
     }
 
 
-        << "TRANSFORMER: Load violation found\n";
+       
 
     auto *GEP =
         llvm::dyn_cast<llvm::GetElementPtrInst>(
