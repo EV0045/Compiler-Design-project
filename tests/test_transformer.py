@@ -121,6 +121,37 @@ class TestConstantTimeTransformer(unittest.TestCase):
         self.assertNotIn("load i8, ptr %arrayidx", output)
 
 
+    def test_mod_exp_unsafe_remainder_keeps_branch(self):
+        source = """
+        #include <stdint.h>
+
+        uint64_t mod_exp(uint64_t base, uint64_t secret_exp, uint64_t mod)
+        {
+            uint64_t result = 1;
+            while (secret_exp > 0) {
+                if (secret_exp & 1) {
+                    result = (result * base) % mod;
+                }
+                base = (base * base) % mod;
+                secret_exp >>= 1;
+            }
+            return result;
+        }
+        """
+
+        config = """
+        {
+            "function": "mod_exp",
+            "secret_parameters": ["secret_exp"],
+            "public_parameters": ["base", "mod"]
+        }
+        """
+
+        output = self.run_opt(source, config)
+
+        self.assertIn("urem i64", output)
+        self.assertIn("br i1 %tobool", output)
+
     def test_transformed_ir_is_valid(self):
         source = """
         int test(int secret, int a, int b)

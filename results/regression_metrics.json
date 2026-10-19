@@ -3,25 +3,25 @@
   "random_cases": 2000,
   "kernels": {
     "aes_sbox": {
-      "transformed_source": "reference",
+      "transformed_source": "pass-output",
       "cases": 256,
       "mismatches": 0,
       "status": "PASS",
-      "seconds": 0.001
+      "seconds": 0.0
     },
     "memcmp": {
-      "transformed_source": "reference",
+      "transformed_source": "pass-output",
       "cases": 2005,
       "mismatches": 0,
       "status": "PASS",
-      "seconds": 0.027
+      "seconds": 0.022
     },
     "mod_exp": {
-      "transformed_source": "reference",
+      "transformed_source": "pass-output",
       "cases": 2007,
       "mismatches": 0,
       "status": "PASS",
-      "seconds": 0.01
+      "seconds": 0.004
     }
   }
 }

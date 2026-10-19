@@ -80,6 +80,7 @@ bool ConstantTimeTransformer::transformModule(
     return changed;
 }
 
+
 bool ConstantTimeTransformer::transformBranch(
     llvm::BranchInst *BI) {
 
@@ -87,48 +88,66 @@ bool ConstantTimeTransformer::transformBranch(
         return false;
     }
 
-    llvm::BasicBlock *ThenBlock =
-        BI->getSuccessor(0);
+    llvm::BasicBlock *Parent = BI->getParent();
+    llvm::BasicBlock *Succ0 = BI->getSuccessor(0);
+    llvm::BasicBlock *Succ1 = BI->getSuccessor(1);
 
-    llvm::BasicBlock *ElseBlock =
-        BI->getSuccessor(1);
-
-    if (!ThenBlock || !ElseBlock) {
+    if (!Succ0 || !Succ1 || Succ0 == Succ1) {
         return false;
     }
 
-    auto *ThenBranch =
-        llvm::dyn_cast<llvm::BranchInst>(
-            ThenBlock->getTerminator());
+    llvm::BasicBlock *ThenBlock = nullptr;
+    llvm::BasicBlock *ElseBlock = nullptr;
+    llvm::BasicBlock *MergeBlock = nullptr;
+    llvm::BranchInst *ThenBranch = nullptr;
+    llvm::BranchInst *ElseBranch = nullptr;
+    bool IsTriangle = false;
 
-    auto *ElseBranch =
-        llvm::dyn_cast<llvm::BranchInst>(
-            ElseBlock->getTerminator());
+    auto *Succ0Branch =
+        llvm::dyn_cast<llvm::BranchInst>(Succ0->getTerminator());
+    auto *Succ1Branch =
+        llvm::dyn_cast<llvm::BranchInst>(Succ1->getTerminator());
 
-    if (!ThenBranch || !ElseBranch ||
-        ThenBranch->isConditional() ||
-        ElseBranch->isConditional()) {
-        return false;
+    if (Succ0Branch && !Succ0Branch->isConditional() &&
+        Succ0Branch->getSuccessor(0) == Succ1) {
+        ThenBlock = Succ0;
+        MergeBlock = Succ1;
+        ThenBranch = Succ0Branch;
+        IsTriangle = true;
+    } else if (Succ1Branch && !Succ1Branch->isConditional() &&
+               Succ1Branch->getSuccessor(0) == Succ0) {
+        ThenBlock = Succ1;
+        MergeBlock = Succ0;
+        ThenBranch = Succ1Branch;
+        IsTriangle = true;
+    } else {
+        if (!Succ0Branch || !Succ1Branch ||
+            Succ0Branch->isConditional() ||
+            Succ1Branch->isConditional() ||
+            Succ0Branch->getSuccessor(0) !=
+                Succ1Branch->getSuccessor(0)) {
+            return false;
+        }
+
+        ThenBlock = Succ0;
+        ElseBlock = Succ1;
+        ThenBranch = Succ0Branch;
+        ElseBranch = Succ1Branch;
+        MergeBlock = ThenBranch->getSuccessor(0);
     }
 
-    llvm::BasicBlock *MergeBlock =
-        ThenBranch->getSuccessor(0);
-
-    if (!MergeBlock ||
-        ElseBranch->getSuccessor(0) != MergeBlock) {
+    if (!MergeBlock || MergeBlock == Parent ||
+        MergeBlock == ThenBlock) {
         return false;
     }
 
     llvm::PHINode *Phi = nullptr;
 
     for (llvm::Instruction &I : *MergeBlock) {
-        if (auto *P =
-                llvm::dyn_cast<llvm::PHINode>(&I)) {
-
+        if (auto *P = llvm::dyn_cast<llvm::PHINode>(&I)) {
             if (Phi) {
                 return false;
             }
-
             Phi = P;
         } else {
             break;
@@ -139,90 +158,93 @@ bool ConstantTimeTransformer::transformBranch(
         return false;
     }
 
-    if (Phi->getIncomingBlock(0) != ThenBlock &&
-        Phi->getIncomingBlock(1) != ThenBlock) {
-        return false;
-    }
-
-    if (Phi->getIncomingBlock(0) != ElseBlock &&
-        Phi->getIncomingBlock(1) != ElseBlock) {
-        return false;
-    }
-
     llvm::Value *ThenValue =
         Phi->getIncomingValueForBlock(ThenBlock);
 
-    llvm::Value *ElseValue =
-        Phi->getIncomingValueForBlock(ElseBlock);
-
-    for (llvm::Instruction &I : *ThenBlock) {
-        if (&I == ThenBranch) {
-            break;
-        }
-
-        if (llvm::isa<llvm::PHINode>(&I) ||
-            !llvm::isSafeToSpeculativelyExecute(&I)) {
-            return false;
-        }
+    if (!ThenValue) {
+        return false;
     }
 
-    for (llvm::Instruction &I : *ElseBlock) {
-        if (&I == ElseBranch) {
-            break;
-        }
+    llvm::Value *ElseValue = nullptr;
 
-        if (llvm::isa<llvm::PHINode>(&I) ||
-            !llvm::isSafeToSpeculativelyExecute(&I)) {
-            return false;
-        }
+    if (IsTriangle) {
+        ElseValue = Phi->getIncomingValueForBlock(Parent);
+    } else {
+        ElseValue = Phi->getIncomingValueForBlock(ElseBlock);
     }
 
-    llvm::Value *Condition =
-        BI->getCondition();
+    if (!ElseValue) {
+        return false;
+    }
+
+    auto SafeToMove = [](llvm::BasicBlock *Block,
+                         llvm::Instruction *Terminator) {
+        for (llvm::Instruction &I : *Block) {
+            if (&I == Terminator) {
+                break;
+            }
+
+            if (llvm::isa<llvm::PHINode>(&I) ||
+                !llvm::isSafeToSpeculativelyExecute(&I)) {
+                return false;
+            }
+        }
+        return true;
+    };
+
+    if (!SafeToMove(ThenBlock, ThenBranch)) {
+    return false;
+    }
+
+    if (!IsTriangle &&
+        !SafeToMove(ElseBlock, ElseBranch)) {
+        return false;
+    }
+
+    llvm::Value *Condition = BI->getCondition();
+
+    if (IsTriangle && ThenBlock == Succ1) {
+        Condition = llvm::BinaryOperator::CreateNot(
+            Condition, "ct.not", BI);
+    }
 
     for (auto It = ThenBlock->begin();
          It != ThenBranch->getIterator();) {
-
         llvm::Instruction *I = &*It++;
         I->moveBefore(BI);
     }
 
-    for (auto It = ElseBlock->begin();
-         It != ElseBranch->getIterator();) {
-
-        llvm::Instruction *I = &*It++;
-        I->moveBefore(BI);
+    if (!IsTriangle) {
+        for (auto It = ElseBlock->begin();
+             It != ElseBranch->getIterator();) {
+            llvm::Instruction *I = &*It++;
+            I->moveBefore(BI);
+        }
     }
 
-    auto *Select =
-        llvm::SelectInst::Create(
-            Condition,
-            ThenValue,
-            ElseValue,
-            "ct.select",
-            BI);
+    auto *Select = llvm::SelectInst::Create(
+        Condition, ThenValue, ElseValue, "ct.select", BI);
 
     Phi->replaceAllUsesWith(Select);
     Phi->eraseFromParent();
 
-    llvm::BranchInst *NewBranch =
-        llvm::BranchInst::Create(MergeBlock);
-
     llvm::ReplaceInstWithInst(
-        BI,
-        NewBranch);
+        BI, llvm::BranchInst::Create(MergeBlock));
 
     ThenBranch->eraseFromParent();
-    ElseBranch->eraseFromParent();
+
+    if (!IsTriangle) {
+        ElseBranch->eraseFromParent();
+        ElseBlock->removeFromParent();
+        delete ElseBlock;
+    }
 
     ThenBlock->removeFromParent();
-    ElseBlock->removeFromParent();
-
     delete ThenBlock;
-    delete ElseBlock;
 
     return true;
 }
+
 
 bool ConstantTimeTransformer::transformMemory(
     llvm::Instruction *I) {
@@ -410,14 +432,12 @@ bool ConstantTimeTransformer::transformGEP(
                 MaskedElement,
                 "ct.lookup");
     }
-
     LI->replaceAllUsesWith(Result);
+    LI->eraseFromParent();
 
     if (GEP->use_empty()) {
-        GEP->eraseFromParent();
-    }
-
-    LI->eraseFromParent();
+       GEP->eraseFromParent();
+     }
 
     llvm::errs()
         << "TRANSFORMER: AES table transformed\n";

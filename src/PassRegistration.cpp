@@ -51,9 +51,9 @@ struct ConstantTimePass : PassInfoMixin<ConstantTimePass>
 
             engine.initialize(initialLabels);
             engine.analyze(F);
+                        ct_pass::ViolationDetector detector;
 
-            auto violations =
-                ct_pass::ViolationDetector().detectViolations(F, engine);
+            auto violations = detector.detectViolations(F, engine);
 
             if (violations.empty()) {
                 continue;
@@ -61,7 +61,33 @@ struct ConstantTimePass : PassInfoMixin<ConstantTimePass>
 
             ct_pass::ConstantTimeTransformer transformer;
 
-            transformer.transformFunction(F, violations);
+            bool changed = transformer.transformFunction(F, violations);
+
+            if (changed) {
+                engine.initialize(initialLabels);
+                engine.analyze(F);
+
+                std::vector<ct_pass::ViolationSite> remainingLeaks;
+
+                bool verified = detector.verifyZeroLeaks(
+                    F, engine, remainingLeaks);
+
+                if (!verified) {
+                    errs() << "CT verification failed for function: "
+                           << F.getName() << "\n";
+
+                    for (const auto &leak : remainingLeaks) {
+                        leak.dump();
+                    }
+                } else {
+                    errs() << "CT verification passed for function: "
+                           << F.getName() << "\n";
+                }
+            } else {
+                errs() << "CT transformation made no changes for function: "
+                       << F.getName() << "\n";
+            }
+
         }
 
         return PreservedAnalyses::none();
