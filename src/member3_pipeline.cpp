@@ -119,6 +119,11 @@ int main(int argc, char **argv) {
 
     const ct_pass::TaintMap &taintMap =
         engine.getTaintMap();
+<<<<<<< Updated upstream
+=======
+    std::cout << "Taint analysis iterations: "
+              << engine.getIterationCount() << "\n";
+>>>>>>> Stashed changes
 
     std::cout << "\nPropagated Taint Labels:\n";
 

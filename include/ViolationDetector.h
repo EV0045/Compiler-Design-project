@@ -56,11 +56,23 @@ using TaintMap = std::unordered_map<const llvm::Value*, TaintLabel>;
  * Week 1 Deliverable:
  *   - Instruction inspector to isolate and list target 'br' and 'load'/'store'/'gep'
  *     instructions across Basic Blocks.
+<<<<<<< Updated upstream
  * 
  * Week 2 & 3 Deliverables:
  *   - Identify exact leak sites by evaluating operands against the PropagatedTaintMap.
  *   - Generate the formal Violation Sites List for the Transformer (Member 4).
  *   - Post-transformation static verification to ensure 0 remaining leaks.
+=======
+ *
+ * Week 2 Deliverable (complete):
+ *   - detectViolations() connected to Member 3 TaintEngine output.
+ *   - Convenience overloads accepting TaintEngine& directly.
+ *   - Generates the formal ViolationSite list for Member 4's Transformer.
+ *
+ * Week 3 Deliverable:
+ *   - Post-transformation static re-verification (verifyZeroLeaks) on
+ *     transformed binaries to confirm zero remaining leaks.
+>>>>>>> Stashed changes
  */
 class ViolationDetector {
 public:
@@ -117,7 +129,17 @@ public:
      * @param remainingLeaks Output vector to collect any remaining leaks.
      * @return true if 0 leaks exist (pass verification), false otherwise.
      */
+<<<<<<< Updated upstream
     bool verifyZeroLeaks(llvm::Function &F, const TaintMap &taintMap, 
+=======
+    bool verifyZeroLeaks(llvm::Function &F, const TaintMap &taintMap,
+                         std::vector<ViolationSite> &remainingLeaks);
+
+    /**
+     * @brief Week 2 Integration: verifyZeroLeaks overload accepting TaintEngine directly.
+     */
+    bool verifyZeroLeaks(llvm::Function &F, const TaintEngine &engine,
+>>>>>>> Stashed changes
                          std::vector<ViolationSite> &remainingLeaks);
 
 private:

@@ -1,25 +1,55 @@
 #include "TaintEngine.h"
 
 #include <algorithm>
+<<<<<<< Updated upstream
 
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Constants.h"
+=======
+#include <functional>
+#include "llvm/IR/CFG.h"
+
+#include "llvm/IR/Instructions.h"
+#include "llvm/IR/IntrinsicInst.h"
+#include "llvm/IR/Constants.h"
+#include "llvm/Analysis/PostDominators.h"
+#include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/SmallVector.h"
+>>>>>>> Stashed changes
 
 namespace ct_pass {
 
 void TaintEngine::initialize(const InitialLabels &initialLabels) {
     taintMap.clear();
     memoryTaintMap.clear();
+<<<<<<< Updated upstream
+=======
+    iterationCount = 0;
+>>>>>>> Stashed changes
 
     for (const auto &[value, label] : initialLabels) {
         if (!value) {
             continue;
         }
 
+<<<<<<< Updated upstream
         taintMap[value] =
             (label == SecrecyLabel::SECRET)
                 ? TaintLabel::SECRET
                 : TaintLabel::PUBLIC;
+=======
+        // Pointer secrecy describes pointee contents, not the address itself.
+        if (value->getType()->isPointerTy()) {
+            taintMap[value] = TaintLabel::PUBLIC;
+            if (label == SecrecyLabel::SECRET)
+                memoryTaintMap[value] = TaintLabel::SECRET;
+        } else {
+            taintMap[value] =
+                (label == SecrecyLabel::SECRET)
+                    ? TaintLabel::SECRET
+                    : TaintLabel::PUBLIC;
+        }
+>>>>>>> Stashed changes
     }
 }
 
@@ -48,6 +78,25 @@ const llvm::Value *TaintEngine::memoryKey(const llvm::Value *V) const {
             key = GEP->getPointerOperand();
         } else if (auto *CI = llvm::dyn_cast<llvm::CastInst>(key)) {
             key = CI->getOperand(0);
+<<<<<<< Updated upstream
+=======
+        } else if (auto *PN = llvm::dyn_cast<llvm::PHINode>(key)) {
+            // Preserve a common backing object across pointer-valued phis.
+            const llvm::Value *common = nullptr;
+            bool same = true;
+            for (const llvm::Value *incoming : PN->incoming_values()) {
+                const llvm::Value *incomingKey = memoryKey(incoming);
+                if (!common) common = incomingKey;
+                else if (common != incomingKey) { same = false; break; }
+            }
+            key = (same && common) ? common : key;
+            if (key == V || key == PN) break;
+        } else if (auto *SI = llvm::dyn_cast<llvm::SelectInst>(key)) {
+            const llvm::Value *a = memoryKey(SI->getTrueValue());
+            const llvm::Value *b = memoryKey(SI->getFalseValue());
+            if (a && a == b) key = a;
+            else break;
+>>>>>>> Stashed changes
         } else {
             break;
         }
@@ -126,6 +175,7 @@ bool TaintEngine::processInstruction(llvm::Instruction &I) {
             isSecret(SI->getFalseValue());
     }
     else if (auto *GEP = llvm::dyn_cast<llvm::GetElementPtrInst>(&I)) {
+<<<<<<< Updated upstream
         secret = isSecret(GEP->getPointerOperand());
 
         if (!secret) {
@@ -134,6 +184,14 @@ bool TaintEngine::processInstruction(llvm::Instruction &I) {
                     secret = true;
                     break;
                 }
+=======
+        // A public pointer to secret data remains a public address unless
+        // an index itself is secret.
+        for (auto it = GEP->idx_begin(); it != GEP->idx_end(); ++it) {
+            if (isSecret(it->get())) {
+                secret = true;
+                break;
+>>>>>>> Stashed changes
             }
         }
     }
@@ -178,11 +236,36 @@ bool TaintEngine::processInstruction(llvm::Instruction &I) {
         }
     }
     else if (auto *CB = llvm::dyn_cast<llvm::CallBase>(&I)) {
+<<<<<<< Updated upstream
         // Conservative handling for unknown/external calls.
         for (unsigned i = 0; i < CB->arg_size(); ++i) {
             if (isSecret(CB->getArgOperand(i))) {
                 secret = true;
                 break;
+=======
+        // Debug/lifetime intrinsics describe IR bookkeeping, not program data
+        // operations; treating them as unknown calls causes false memory taint.
+        if (llvm::isa<llvm::IntrinsicInst>(CB)) return false;
+        bool hasSecretArgument = false;
+        for (unsigned i = 0; i < CB->arg_size(); ++i) {
+            llvm::Value *arg = CB->getArgOperand(i);
+            hasSecretArgument |= isSecret(arg);
+            if (arg->getType()->isPointerTy()) {
+                const llvm::Value *key = memoryKey(arg);
+                auto mem = memoryTaintMap.find(key);
+                hasSecretArgument |= mem != memoryTaintMap.end() &&
+                                     mem->second == TaintLabel::SECRET;
+            }
+        }
+        secret = hasSecretArgument;
+        // Unknown calls may write through output pointers. Conservatively taint
+        // pointee memory when any call input is secret.
+        if (hasSecretArgument) {
+            for (unsigned i = 0; i < CB->arg_size(); ++i) {
+                llvm::Value *arg = CB->getArgOperand(i);
+                if (arg->getType()->isPointerTy())
+                    updateMemoryLabel(arg, TaintLabel::SECRET);
+>>>>>>> Stashed changes
             }
         }
     }
@@ -204,6 +287,7 @@ bool TaintEngine::processInstruction(llvm::Instruction &I) {
 }
 
 void TaintEngine::analyze(llvm::Function &F) {
+<<<<<<< Updated upstream
     /*
      * The analysis is iterative because an instruction can depend on
      * a value that becomes SECRET later in the scan.
@@ -217,6 +301,62 @@ void TaintEngine::analyze(llvm::Function &F) {
             for (llvm::Instruction &I : BB) {
                 if (processInstruction(I)) {
                     changed = true;
+=======
+    // Forward fixed-point iteration in reverse post-order improves convergence.
+    llvm::SmallVector<llvm::BasicBlock *, 32> postOrder;
+    llvm::SmallPtrSet<llvm::BasicBlock *, 32> visited;
+    std::function<void(llvm::BasicBlock *)> dfs = [&](llvm::BasicBlock *BB) {
+        if (!BB || !visited.insert(BB).second) return;
+        for (llvm::BasicBlock *Succ : llvm::successors(BB)) dfs(Succ);
+        postOrder.push_back(BB);
+    };
+    if (!F.empty()) dfs(&F.getEntryBlock());
+    std::reverse(postOrder.begin(), postOrder.end());
+    // Include unreachable blocks too, so the analysis is conservative.
+    for (llvm::BasicBlock &BB : F)
+        if (!visited.count(&BB)) postOrder.push_back(&BB);
+
+    llvm::PostDominatorTree PDT;
+    PDT.recalculate(F);
+    bool changed = true;
+    while (changed) {
+        ++iterationCount;
+        changed = false;
+        for (llvm::BasicBlock *BB : postOrder) {
+            for (llvm::Instruction &I : *BB)
+                changed |= processInstruction(I);
+        }
+
+        // Implicit-flow taint: secret control conditions taint join phis and
+        // memory written on paths controlled by the branch, stopping at IPD.
+        for (llvm::BasicBlock *BB : postOrder) {
+            auto *BI = llvm::dyn_cast<llvm::BranchInst>(BB->getTerminator());
+            if (!BI || !BI->isConditional() || !isSecret(BI->getCondition()))
+                continue;
+            llvm::BasicBlock *Join = nullptr;
+            if (auto *Node = PDT.getNode(BB))
+                if (auto *IDom = Node->getIDom()) Join = IDom->getBlock();
+
+            llvm::SmallVector<llvm::BasicBlock *, 16> work;
+            llvm::SmallPtrSet<llvm::BasicBlock *, 32> controlled;
+            work.push_back(BI->getSuccessor(0));
+            work.push_back(BI->getSuccessor(1));
+            while (!work.empty()) {
+                llvm::BasicBlock *Cur = work.pop_back_val();
+                if (!Cur || Cur == Join || !controlled.insert(Cur).second) continue;
+                for (llvm::Instruction &I : *Cur) {
+                    if (auto *SI = llvm::dyn_cast<llvm::StoreInst>(&I))
+                        changed |= updateMemoryLabel(SI->getPointerOperand(), TaintLabel::SECRET);
+                }
+                for (llvm::BasicBlock *Succ : llvm::successors(Cur))
+                    if (Succ != Join) work.push_back(Succ);
+            }
+            if (Join) {
+                for (llvm::Instruction &I : *Join) {
+                    auto *PN = llvm::dyn_cast<llvm::PHINode>(&I);
+                    if (!PN) break;
+                    changed |= updateLabel(PN, TaintLabel::SECRET);
+>>>>>>> Stashed changes
                 }
             }
         }

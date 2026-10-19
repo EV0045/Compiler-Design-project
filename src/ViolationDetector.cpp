@@ -154,17 +154,6 @@ bool ViolationDetector::inspectGEP(llvm::GetElementPtrInst *GEP,
                                   ViolationSite &outSite) {
     if (!GEP) return false;
 
-    // Check if the base pointer itself is secret
-    llvm::Value *ptr = GEP->getPointerOperand();
-    if (isSecret(ptr, taintMap)) {
-        outSite.instruction = GEP;
-        outSite.type = ViolationType::MEMORY_LEAK;
-        outSite.leakingOperand = ptr;
-        outSite.description = "Pointer arithmetic on secret base address (cache-timing side channel)";
-        outSite.sourceLocation = extractSourceLocation(GEP);
-        return true;
-    }
-
     // Check if any indexing offset is secret (e.g. table[secret])
     for (auto it = GEP->idx_begin(); it != GEP->idx_end(); ++it) {
         llvm::Value *idx = it->get();
@@ -229,4 +218,29 @@ bool ViolationDetector::verifyZeroLeaks(llvm::Function &F,
     return remainingLeaks.empty();
 }
 
+<<<<<<< Updated upstream
+=======
+// ---------------------------------------------------------------------------
+// Week 2 Integration: TaintEngine convenience overloads
+// These bridge Member 3's TaintEngine output directly into the detector,
+// so callers do not need to manually extract getTaintMap().
+// ---------------------------------------------------------------------------
+
+std::vector<ViolationSite>
+ViolationDetector::detectViolations(llvm::Function &F, const TaintEngine &engine) {
+    return detectViolations(F, engine.getTaintMap());
+}
+
+std::vector<ViolationSite>
+ViolationDetector::detectViolations(llvm::Module &M, const TaintEngine &engine) {
+    return detectViolations(M, engine.getTaintMap());
+}
+
+bool ViolationDetector::verifyZeroLeaks(llvm::Function &F,
+                                       const TaintEngine &engine,
+                                       std::vector<ViolationSite> &remainingLeaks) {
+    return verifyZeroLeaks(F, engine.getTaintMap(), remainingLeaks);
+}
+
+>>>>>>> Stashed changes
 } // namespace ct_pass

@@ -39,8 +39,15 @@ public:
 
     // Convenience query for the current result.
     bool isSecret(const llvm::Value *V) const;
+<<<<<<< Updated upstream
 
 private:
+=======
+    unsigned getIterationCount() const { return iterationCount; }
+
+private:
+    unsigned iterationCount = 0;
+>>>>>>> Stashed changes
     TaintMap taintMap;
     std::unordered_map<const llvm::Value*, TaintLabel> memoryTaintMap;
 
