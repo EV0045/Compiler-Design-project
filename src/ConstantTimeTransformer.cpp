@@ -1,3 +1,4 @@
+
 #include "ConstantTimeTransformer.h"
 
 #include <llvm/Analysis/ValueTracking.h>
@@ -226,9 +227,9 @@ bool ConstantTimeTransformer::transformBranch(
 bool ConstantTimeTransformer::transformMemory(
     llvm::Instruction *I) {
 
-   if (!I || I->getParent() == nullptr) {
-    return false;
-	}
+    if (!I || I->getParent() == nullptr) {
+        return false;
+    }
 
     auto *LI =
         llvm::dyn_cast<llvm::LoadInst>(I);
@@ -236,9 +237,6 @@ bool ConstantTimeTransformer::transformMemory(
     if (!LI) {
         return false;
     }
-
-
-       
 
     auto *GEP =
         llvm::dyn_cast<llvm::GetElementPtrInst>(
@@ -354,16 +352,21 @@ bool ConstantTimeTransformer::transformGEP(
     }
 
     llvm::errs()
-        << "TRANSFORMER: Building constant-time lookup\n";
+        << "TRANSFORMER: Building mask-based lookup\n";
 
     llvm::IRBuilder<> Builder(LI);
 
     llvm::Type *ElementType =
         ArrayTy->getElementType();
 
+    if (!ElementType->isIntegerTy()) {
+        llvm::errs()
+            << "TRANSFORMER: Unsupported non-integer table element\n";
+        return false;
+    }
+
     llvm::Value *Result =
-        llvm::Constant::getNullValue(
-            ElementType);
+        llvm::Constant::getNullValue(ElementType);
 
     for (uint64_t i = 0;
          i < NumElements;
@@ -371,6 +374,12 @@ bool ConstantTimeTransformer::transformGEP(
 
         llvm::Constant *Element =
             Array->getElementAsConstant(i);
+
+        if (Element->getType() != ElementType) {
+            llvm::errs()
+                << "TRANSFORMER: Table element type mismatch\n";
+            return false;
+        }
 
         llvm::Constant *IndexConstant =
             llvm::ConstantInt::get(
@@ -383,11 +392,22 @@ bool ConstantTimeTransformer::transformGEP(
                 IndexConstant,
                 "ct.index");
 
-        Result =
-            Builder.CreateSelect(
+        llvm::Value *Mask =
+            Builder.CreateSExt(
                 Compare,
+                ElementType,
+                "ct.mask");
+
+        llvm::Value *MaskedElement =
+            Builder.CreateAnd(
+                Mask,
                 Element,
+                "ct.masked");
+
+        Result =
+            Builder.CreateOr(
                 Result,
+                MaskedElement,
                 "ct.lookup");
     }
 

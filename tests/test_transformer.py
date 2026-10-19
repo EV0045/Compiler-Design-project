@@ -113,9 +113,13 @@ class TestConstantTimeTransformer(unittest.TestCase):
 
         output = self.run_opt(source, config)
 
-        self.assertIn("select i1", output)
+
         self.assertIn("icmp eq", output)
+        self.assertIn("sext i1", output)
+        self.assertIn("and i8", output)
+        self.assertIn("or i8", output)
         self.assertNotIn("load i8, ptr %arrayidx", output)
+
 
     def test_transformed_ir_is_valid(self):
         source = """
