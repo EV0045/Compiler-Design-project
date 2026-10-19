@@ -77,3 +77,8 @@ target_link_libraries(test_taint_engine
     PRIVATE
     ${LLVM_LIBS}
 )
+
+# Plugin symbols (LLVM/cl::opt) are resolved from `opt` at load time on macOS.
+if(APPLE)
+    target_link_options(ConstantTimePass PRIVATE -undefined dynamic_lookup)
+endif()

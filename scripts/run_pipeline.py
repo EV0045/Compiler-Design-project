@@ -25,6 +25,12 @@ def main():
 
     build_dir = Path("build")
     plugin = build_dir / "libConstantTimePass.so"
+    if not plugin.exists():
+        plugin = build_dir / "libConstantTimePass.dylib"
+    config = Path("benchmarks/configs") / (source_file.stem + ".json")
+    if not config.exists():
+        print("Secrecy config not found:", config)
+        sys.exit(1)
 
     if not plugin.exists():
         print("Plugin not found:", plugin)
@@ -39,7 +45,19 @@ def main():
         "-S",
         "-emit-llvm",
         "-O0",
+        "-Xclang",
+        "-disable-O0-optnone",
+        "-fno-discard-value-names",
         str(source_file),
+        "-o",
+        str(input_ir)
+    ])
+
+    run_command([
+        "opt",
+        "-passes=mem2reg",
+        str(input_ir),
+        "-S",
         "-o",
         str(input_ir)
     ])
@@ -48,6 +66,7 @@ def main():
         "opt",
         "-load-pass-plugin=" + str(plugin),
         "-passes=constant-time-pass",
+        "-ct-config=" + str(config),
         str(input_ir),
         "-S",
         "-o",
