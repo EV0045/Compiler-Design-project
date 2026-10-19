@@ -692,6 +692,316 @@ class TestDetectorTaintEngineIntegration(unittest.TestCase):
         self.assertEqual(violations[0].instruction.name, "loop_br")
 
 
+class TestWeek3PostTransformVerification(unittest.TestCase):
+    """
+    Week 3 Deliverable Tests — Member 2 (Thurya)
+    Post-transformation static re-verification.
+
+    Each test simulates a specific state of the IR *after* Member 4's
+    (Vignesh's) ConstantTimeTransformer has rewritten the module, then
+    asserts that verify_zero_leaks() correctly classifies the result.
+
+    Module-level verification mirrors ViolationDetector::verifyZeroLeaks(Module&)
+    which iterates all non-declaration functions and accumulates leaks.
+    """
+
+    def setUp(self):
+        self.detector = ViolationDetector()
+
+    # -----------------------------------------------------------------------
+    # Helper: build a clean function (no branches, all-public loads)
+    # -----------------------------------------------------------------------
+    def _make_clean_function(self, name: str) -> MockFunction:
+        fn = MockFunction(name)
+        bb = MockBasicBlock("entry")
+        bb.add_instruction(MockLoadInst(f"{name}_result", ptr_operand=MockValue("pub_ptr")))
+        fn.add_basic_block(bb)
+        return fn
+
+    # -----------------------------------------------------------------------
+    # Helper: simulate module-level verify (mirrors verifyZeroLeaks(Module&))
+    # -----------------------------------------------------------------------
+    def _module_verify_zero_leaks(
+        self,
+        functions: list,
+        taint_map: dict,
+    ):
+        """
+        Python mirror of ct_pass::ViolationDetector::verifyZeroLeaks(Module&).
+        Iterates all functions, collects all remaining ViolationSites.
+        Returns (pass: bool, all_leaks: List[ViolationSite]).
+        """
+        all_leaks = []
+        for fn in functions:
+            ok, leaks = self.detector.verify_zero_leaks(fn, taint_map)
+            all_leaks.extend(leaks)
+        return (len(all_leaks) == 0, all_leaks)
+
+    # =======================================================================
+    # Test W3-1: Single fully-transformed function — must PASS
+    # =======================================================================
+    def test_w3_single_function_fully_transformed_passes(self):
+        """
+        After transformation: the conditional branch is replaced with a
+        select instruction. No br/load/store/GEP with secret operands remain.
+        verifyZeroLeaks must return True with an empty remaining-leak list.
+        """
+        fn = MockFunction("memcmp_transformed")
+        bb = MockBasicBlock("entry")
+
+        # select instruction result — safe, not a branch
+        result_val = MockValue("select_result")
+        bb.add_instruction(MockLoadInst("final_ld", ptr_operand=MockValue("pub_ptr")))
+        fn.add_basic_block(bb)
+
+        taint_map = {
+            "secret_param": TaintLabel.SECRET,
+            "diff":         TaintLabel.SECRET,   # still tainted internally
+            "cmp":          TaintLabel.SECRET,   # still tainted (used by select)
+            "select_result": TaintLabel.SECRET,  # select result is SECRET
+            "pub_ptr":       TaintLabel.PUBLIC,  # but the address is public
+        }
+
+        ok, leaks = self.detector.verify_zero_leaks(fn, taint_map)
+        self.assertTrue(ok, "Fully transformed function should have zero leaks")
+        self.assertEqual(len(leaks), 0)
+
+    # =======================================================================
+    # Test W3-2: Partial transformation — one leak remains → must FAIL
+    # =======================================================================
+    def test_w3_partial_transform_residual_branch_fails(self):
+        """
+        After partial transformation: one branch was rewritten but a second
+        secret-conditioned branch was missed. verifyZeroLeaks must return False
+        and report exactly the one remaining BRANCH_LEAK.
+        """
+        fn = MockFunction("mod_exp_partial")
+        bb_loop = MockBasicBlock("loop_body")
+
+        # The second exponent-bit branch was not eliminated
+        residual_cond = MockValue("bit2_cmp")
+        residual_br = MockBranchInst("residual_br", condition=residual_cond,
+                                     source_loc="mod_exp.c:35:9")
+        bb_loop.add_instruction(residual_br)
+        fn.add_basic_block(bb_loop)
+
+        taint_map = {
+            "exp":      TaintLabel.SECRET,
+            "bit2":     TaintLabel.SECRET,
+            "bit2_cmp": TaintLabel.SECRET,   # still tainted → residual leak
+        }
+
+        ok, leaks = self.detector.verify_zero_leaks(fn, taint_map)
+        self.assertFalse(ok, "Partial transformation should fail verification")
+        self.assertEqual(len(leaks), 1)
+        self.assertEqual(leaks[0].type, ViolationType.BRANCH_LEAK)
+        self.assertEqual(leaks[0].instruction.name, "residual_br")
+        self.assertEqual(leaks[0].source_loc, "mod_exp.c:35:9")
+
+    # =======================================================================
+    # Test W3-3: Residual MEMORY_LEAK after incomplete GEP linearisation
+    # =======================================================================
+    def test_w3_residual_memory_leak_after_incomplete_gep_transform(self):
+        """
+        After partial transformation: the branch was eliminated but the GEP
+        table lookup was not linearised. A MEMORY_LEAK (secret index) remains.
+        verifyZeroLeaks must return False and report that MEMORY_LEAK.
+        """
+        fn = MockFunction("aes_partial")
+        bb = MockBasicBlock("entry")
+
+        sbox      = MockValue("AES_SBOX")
+        key_byte  = MockValue("key_byte")
+        gep_leak  = MockGetElementPtrInst("sbox_gep", base_ptr=sbox,
+                                          indices=[key_byte],
+                                          source_loc="aes_sbox.c:18:14")
+        bb.add_instruction(gep_leak)
+        fn.add_basic_block(bb)
+
+        taint_map = {
+            "AES_SBOX": TaintLabel.PUBLIC,
+            "key_byte": TaintLabel.SECRET,   # index still secret → MEMORY_LEAK
+        }
+
+        ok, leaks = self.detector.verify_zero_leaks(fn, taint_map)
+        self.assertFalse(ok)
+        self.assertEqual(len(leaks), 1)
+        self.assertEqual(leaks[0].type, ViolationType.MEMORY_LEAK)
+        self.assertEqual(leaks[0].leaking_operand.name, "key_byte")
+
+    # =======================================================================
+    # Test W3-4: Multiple violations remain after no transformation → FAIL
+    # =======================================================================
+    def test_w3_multiple_residual_violations_all_reported(self):
+        """
+        If the transformer was not applied at all, all original violations
+        should be present. verifyZeroLeaks must report every one of them.
+        """
+        fn = MockFunction("untransformed_fn")
+        bb = MockBasicBlock("entry")
+
+        secret_cond = MockValue("secret_cond")
+        sec_ptr     = MockValue("sec_ptr")
+        sbox_table  = MockValue("sbox")
+        sec_idx     = MockValue("sec_idx")
+
+        bb.add_instruction(MockBranchInst("leak_br", condition=secret_cond))
+        bb.add_instruction(MockLoadInst("leak_ld", ptr_operand=sec_ptr))
+        bb.add_instruction(MockGetElementPtrInst("leak_gep", base_ptr=sbox_table,
+                                                  indices=[sec_idx]))
+        fn.add_basic_block(bb)
+
+        taint_map = {
+            "secret_cond": TaintLabel.SECRET,
+            "sec_ptr":     TaintLabel.SECRET,
+            "sbox":        TaintLabel.PUBLIC,
+            "sec_idx":     TaintLabel.SECRET,
+        }
+
+        ok, leaks = self.detector.verify_zero_leaks(fn, taint_map)
+        self.assertFalse(ok)
+        self.assertEqual(len(leaks), 3)
+
+        types = [l.type for l in leaks]
+        self.assertIn(ViolationType.BRANCH_LEAK, types)
+        self.assertEqual(types.count(ViolationType.MEMORY_LEAK), 2)
+
+    # =======================================================================
+    # Test W3-5: Module-level — all functions clean → module PASS
+    # =======================================================================
+    def test_w3_module_level_all_functions_clean_passes(self):
+        """
+        Module-level post-transformation check: three functions are all clean.
+        The module-level verify_zero_leaks must aggregate zero leaks and PASS.
+        """
+        fn_memcmp  = self._make_clean_function("memcmp_ct")
+        fn_aes     = self._make_clean_function("aes_ct")
+        fn_mod_exp = self._make_clean_function("mod_exp_ct")
+
+        taint_map = {
+            "pub_ptr": TaintLabel.PUBLIC,
+        }
+
+        ok, all_leaks = self._module_verify_zero_leaks(
+            [fn_memcmp, fn_aes, fn_mod_exp], taint_map
+        )
+        self.assertTrue(ok, "All-clean module must pass module-level verification")
+        self.assertEqual(len(all_leaks), 0)
+
+    # =======================================================================
+    # Test W3-6: Module-level — one dirty function poisons the whole module
+    # =======================================================================
+    def test_w3_module_level_one_dirty_function_fails_module(self):
+        """
+        Module-level verification: two functions are clean, one has a residual
+        BRANCH_LEAK. The module-level check must return False and surface the
+        single leak from the dirty function.
+        """
+        fn_clean1 = self._make_clean_function("memcmp_ct")
+        fn_clean2 = self._make_clean_function("aes_ct")
+
+        # mod_exp_ct still has a residual branch leak
+        fn_dirty = MockFunction("mod_exp_ct")
+        bb = MockBasicBlock("loop_body")
+        residual = MockValue("secret_bit")
+        bb.add_instruction(MockBranchInst("leak_br", condition=residual,
+                                          source_loc="mod_exp.c:31:9"))
+        fn_dirty.add_basic_block(bb)
+
+        taint_map = {
+            "pub_ptr":    TaintLabel.PUBLIC,
+            "secret_bit": TaintLabel.SECRET,
+        }
+
+        ok, all_leaks = self._module_verify_zero_leaks(
+            [fn_clean1, fn_clean2, fn_dirty], taint_map
+        )
+        self.assertFalse(ok, "Module with one dirty function must fail")
+        self.assertEqual(len(all_leaks), 1)
+        self.assertEqual(all_leaks[0].type, ViolationType.BRANCH_LEAK)
+        # Confirm the leak came from the dirty function
+        self.assertEqual(all_leaks[0].instruction.name, "leak_br")
+
+    # =======================================================================
+    # Test W3-7: Post-transform AES kernel — linear scan eliminates GEP leak
+    # =======================================================================
+    def test_w3_aes_kernel_post_transform_passes(self):
+        """
+        Post-transformation AES S-box kernel scenario.
+
+        The ConstantTimeTransformer replaced AES_SBOX[key_byte] with a
+        branchless linear scan emitting only ICmpEQ + Select instructions.
+        No GEP with a secret index remains in the IR.
+        verifyZeroLeaks must PASS.
+        """
+        fn = MockFunction("aes_sbox_lookup")
+        bb = MockBasicBlock("entry")
+
+        # Post-transform IR: a sequence of ICmpEQ + Select replaces the GEP.
+        # From ViolationDetector's view: no LoadInst/GEP with secret pointer/index.
+        # Only a final store to a public result address.
+        result_ptr = MockValue("result_addr")
+        bb.add_instruction(MockStoreInst("store_result",
+                                         val_operand=MockValue("select_final"),
+                                         ptr_operand=result_ptr))
+        fn.add_basic_block(bb)
+
+        taint_map = {
+            "key_byte":    TaintLabel.SECRET,  # input remains secret
+            "AES_SBOX":    TaintLabel.PUBLIC,
+            # select results carry secret data but go to a public address
+            "select_final": TaintLabel.SECRET,
+            "result_addr":  TaintLabel.PUBLIC,  # output address is public
+        }
+
+        ok, leaks = self.detector.verify_zero_leaks(fn, taint_map)
+        self.assertTrue(ok, "AES post-transform should have zero CT violations")
+        self.assertEqual(len(leaks), 0)
+
+    # =======================================================================
+    # Test W3-8: Post-transform memcmp — branch elimination passes
+    # =======================================================================
+    def test_w3_memcmp_kernel_post_transform_passes(self):
+        """
+        Post-transformation memcmp kernel scenario.
+
+        The early-exit branch (BRANCH_LEAK) was converted to a bitwise-OR
+        accumulator (no conditional branch). The only remaining instruction
+        is a store of the accumulated XOR result to a public output address.
+        verifyZeroLeaks must PASS.
+        """
+        fn = MockFunction("memcmp_ct")
+        bb_loop  = MockBasicBlock("loop_body")
+        bb_exit  = MockBasicBlock("exit")
+
+        # Loop body: public-address loads (pointer arithmetic on public index)
+        pub_a = MockValue("pub_addr_a")
+        pub_b = MockValue("pub_addr_b")
+        bb_loop.add_instruction(MockLoadInst("ld_a", ptr_operand=pub_a))
+        bb_loop.add_instruction(MockLoadInst("ld_b", ptr_operand=pub_b))
+
+        # Exit block: store accumulated diff to a public output slot
+        out_ptr = MockValue("out_ptr")
+        bb_exit.add_instruction(MockStoreInst("store_diff",
+                                              val_operand=MockValue("acc_diff"),
+                                              ptr_operand=out_ptr))
+        fn.add_basic_block(bb_loop)
+        fn.add_basic_block(bb_exit)
+
+        taint_map = {
+            "secret":   TaintLabel.SECRET,
+            "acc_diff": TaintLabel.SECRET,  # accumulated diff is secret
+            "pub_addr_a": TaintLabel.PUBLIC,
+            "pub_addr_b": TaintLabel.PUBLIC,
+            "out_ptr":    TaintLabel.PUBLIC,  # result address is public → OK
+        }
+
+        ok, leaks = self.detector.verify_zero_leaks(fn, taint_map)
+        self.assertTrue(ok, "memcmp post-transform should have zero CT violations")
+        self.assertEqual(len(leaks), 0)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
 

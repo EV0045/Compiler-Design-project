@@ -252,4 +252,37 @@ bool ViolationDetector::verifyZeroLeaks(llvm::Function &F,
     return verifyZeroLeaks(F, engine.getTaintMap(), remainingLeaks);
 }
 
+// ---------------------------------------------------------------------------
+// Week 3 Deliverable: Module-level post-transformation verification
+// ---------------------------------------------------------------------------
+
+bool ViolationDetector::verifyZeroLeaks(llvm::Module &M,
+                                       const TaintMap &taintMap,
+                                       std::vector<ViolationSite> &remainingLeaks) {
+    remainingLeaks.clear();
+
+    for (llvm::Function &F : M) {
+        if (F.isDeclaration()) {
+            continue; // skip external function prototypes
+        }
+
+        std::vector<ViolationSite> funcLeaks;
+        verifyZeroLeaks(F, taintMap, funcLeaks);
+
+        remainingLeaks.insert(
+            remainingLeaks.end(),
+            funcLeaks.begin(),
+            funcLeaks.end()
+        );
+    }
+
+    return remainingLeaks.empty();
+}
+
+bool ViolationDetector::verifyZeroLeaks(llvm::Module &M,
+                                       const TaintEngine &engine,
+                                       std::vector<ViolationSite> &remainingLeaks) {
+    return verifyZeroLeaks(M, engine.getTaintMap(), remainingLeaks);
+}
+
 } // namespace ct_pass

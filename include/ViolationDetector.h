@@ -66,9 +66,10 @@ using TaintMap = std::unordered_map<const llvm::Value*, TaintLabel>;
  *   - Convenience overloads accepting TaintEngine& directly.
  *   - Generates the formal ViolationSite list for Member 4's Transformer.
  *
- * Week 3 Deliverable:
- *   - Post-transformation static re-verification (verifyZeroLeaks) on
- *     transformed binaries to confirm zero remaining leaks.
+ * Week 3 Deliverable (complete):
+ *   - Post-transformation static re-verification on transformed binaries.
+ *   - verifyZeroLeaks(Function&) and verifyZeroLeaks(Module&) overloads
+ *     confirm zero remaining leaks across the entire TransformedModule.
  */
 class ViolationDetector {
 public:
@@ -146,6 +147,31 @@ public:
      * @brief Week 2 Integration: verifyZeroLeaks overload accepting TaintEngine directly.
      */
     bool verifyZeroLeaks(llvm::Function &F, const TaintEngine &engine,
+                         std::vector<ViolationSite> &remainingLeaks);
+
+    /**
+     * @brief Week 3 Deliverable: Module-level post-transformation verification.
+     *
+     * Iterates every non-declaration function in the module and collects all
+     * remaining violations. Returns true only when the entire module is
+     * leak-free — i.e., the transformation pass has eliminated every
+     * BRANCH_LEAK and MEMORY_LEAK across all functions.
+     *
+     * @param M              The transformed LLVM Module (output of Vignesh's pass).
+     * @param taintMap       The final propagated TaintMap from Rohit's engine.
+     * @param remainingLeaks Output vector collecting any surviving ViolationSites.
+     * @return true if zero leaks remain in the entire module, false otherwise.
+     */
+    bool verifyZeroLeaks(llvm::Module &M, const TaintMap &taintMap,
+                         std::vector<ViolationSite> &remainingLeaks);
+
+    /**
+     * @brief Week 3 Deliverable: Module-level verifyZeroLeaks accepting TaintEngine directly.
+     *
+     * Convenience overload — extracts the propagated TaintMap from the engine
+     * and delegates to verifyZeroLeaks(Module&, TaintMap&, ...).
+     */
+    bool verifyZeroLeaks(llvm::Module &M, const TaintEngine &engine,
                          std::vector<ViolationSite> &remainingLeaks);
 
 private:
