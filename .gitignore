@@ -1,4 +1,6 @@
 build/
-*.ll
+.venv/
 __pycache__/
+*.pyc
+*.ll
 .DS_Store

@@ -1,0 +1,10 @@
+AES S-box transformation benchmark
+Compiler: LLVM/Clang 21.1.8
+Optimization: -O2
+Inputs per implementation: 5000000
+Original CPU time: 0.006577 seconds
+Transformed CPU time: 0.606140 seconds
+Measured overhead: 9116.06%
+Measured slowdown: approximately 92.1x
+Correctness: all 256 AES inputs matched
+IR verification: passed
