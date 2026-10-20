@@ -14,14 +14,14 @@
       "cases": 2005,
       "mismatches": 0,
       "status": "PASS",
-      "seconds": 0.022
+      "seconds": 0.011
     },
     "mod_exp": {
       "transformed_source": "pass-output",
       "cases": 2007,
       "mismatches": 0,
       "status": "PASS",
-      "seconds": 0.004
+      "seconds": 0.009
     }
   }
 }
