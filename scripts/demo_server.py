@@ -17,8 +17,27 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 KERNELS = ROOT / "benchmarks" / "kernels"
 CONFIGS = ROOT / "benchmarks" / "configs"
+REFERENCE = ROOT / "benchmarks" / "reference"
 FRONTEND = ROOT / "frontend"
 METRICS = ROOT / "results" / "regression_metrics.json"
+PERF    = ROOT / "results" / "performance_benchmarks.json"
+
+# Reasons a kernel is not transformed by the local CFG pass
+WHY_UNCHANGED = {
+    "memcmp": (
+        "early-exit loop detected",
+        "secret_memcmp returns early when bytes differ, creating secret-dependent "
+        "control flow that our CFG-level pass cannot safely eliminate. "
+        "A hand-written branchless OR/XOR loop is used as the reference implementation."
+    ),
+    "mod_exp": (
+        "unsafe integer division",
+        "mod_exp uses \u2018%\u2019 (urem) with a secret operand. Replacing the "
+        "branch over this with a masked select is unsafe without knowing the "
+        "divisor is non-zero at compile time. A fixed-iteration bitmask loop "
+        "is provided as the reference implementation."
+    ),
+}
 
 
 def find_plugin():
@@ -43,12 +62,24 @@ def list_kernels():
     out = []
     for c in sorted(KERNELS.glob("*.c")):
         cfg = CONFIGS / (c.stem + ".json")
+        ref = REFERENCE / (c.stem + "_ct.c")
+        why = WHY_UNCHANGED.get(c.stem)
         out.append({
             "name": c.stem,
             "source": c.read_text(),
             "config": json.loads(cfg.read_text()) if cfg.exists() else None,
+            "reference_source": ref.read_text() if ref.exists() else None,
+            "why_unchanged_short": why[0] if why else None,
+            "why_unchanged_long": why[1] if why else None,
         })
     return out
+
+
+def get_reference(kernel_name):
+    ref = REFERENCE / (kernel_name + "_ct.c")
+    if not ref.exists():
+        return None
+    return ref.read_text()
 
 
 def run_pass(body):
@@ -82,15 +113,20 @@ def run_pass(body):
         vrc, vout = sh(["opt", "-passes=verify", d / "out.ll", "-disable-output"], log)
         before, after = (d / "in.ll").read_text(), (d / "out.ll").read_text()
     stages = [l.strip() for l in out.splitlines() if l.startswith(("TRANSFORMER", "CT verification"))]
+    changed = before != after
+    kernel_name = body.get("kernel_name", "")
+    why = WHY_UNCHANGED.get(kernel_name) if not changed else None
     return {
         "ok": True,
         "before": before,
         "after": after,
-        "changed": before != after,
+        "changed": changed,
         "ir_valid": vrc == 0,
         "ct_verified": any("CT verification passed" in l for l in stages),
         "stages": stages,
         "log": "\n".join(log),
+        "why_unchanged_short": why[0] if why else None,
+        "why_unchanged_long": why[1] if why else None,
     }
 
 
@@ -110,6 +146,15 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, list_kernels())
         elif self.path == "/api/metrics":
             self._send(200, json.loads(METRICS.read_text()) if METRICS.exists() else {})
+        elif self.path == "/api/perf":
+            self._send(200, json.loads(PERF.read_text()) if PERF.exists() else {})
+        elif self.path.startswith("/api/reference/"):
+            name = self.path.split("/")[-1]
+            src = get_reference(name)
+            if src:
+                self._send(200, {"source": src})
+            else:
+                self._send(404, {"error": "no reference for " + name})
         else:
             self._send(404, {"error": "not found"})
 
@@ -118,6 +163,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(404, {"error": "not found"})
         try:
             body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
+            # forward the kernel name so run_pass can look up why_unchanged
             self._send(200, run_pass(body))
         except Exception as e:
             self._send(500, {"ok": False, "error": str(e)})

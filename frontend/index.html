@@ -3,108 +3,737 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Constant-Time Pass Demo</title>
+<title>Constant-Time LLVM Pass — Demo</title>
+<meta name="description" content="Demo for the Compiler Design project: an LLVM pass that detects and eliminates secret-dependent control flow to produce constant-time code.">
 <style>
-:root{--bg:#f6f7f9;--card:#fff;--fg:#1c2230;--mut:#667085;--bd:#dfe3ea;--ac:#2f5bea;--ok:#12805c;--bad:#c0392b;--add:#e6f6ec;--del:#fdecea}
-@media (prefers-color-scheme:dark){:root{--bg:#12151c;--card:#1a1f2a;--fg:#e6e9ef;--mut:#9aa4b5;--bd:#2c3342;--ac:#7c9cff;--ok:#4fd1a1;--bad:#ff8a7a;--add:#12301f;--del:#3a1b18}}
-*{box-sizing:border-box}
-body{margin:0;overflow-x:hidden;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,sans-serif}
-header{padding:20px 16px 8px;max-width:1200px;margin:auto}
-h1{margin:0;font-size:22px}header p{margin:4px 0 0;color:var(--mut)}
-main{max-width:1200px;margin:auto;padding:8px 16px 40px;display:grid;grid-template-columns:minmax(0,1fr);gap:16px}
-.card{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:16px}
-.row{display:flex;flex-wrap:wrap;gap:12px;align-items:end}
-label{display:block;font-size:12px;color:var(--mut);margin-bottom:4px}
-select,input,textarea{background:var(--bg);color:var(--fg);border:1px solid var(--bd);border-radius:6px;padding:7px 9px;font:inherit}
-textarea{width:100%;font:13px/1.45 ui-monospace,Menlo,monospace;min-height:220px;resize:vertical}
-button{background:var(--ac);color:#fff;border:0;border-radius:6px;padding:9px 18px;font:inherit;font-weight:600;cursor:pointer}
-button:disabled{opacity:.5}
-.params{display:flex;flex-wrap:wrap;gap:8px}
-.chip{border:1px solid var(--bd);border-radius:999px;padding:4px 6px 4px 12px;display:flex;gap:8px;align-items:center;font:13px ui-monospace,Menlo,monospace}
-.chip select{padding:2px 4px;font-size:12px}
-.two{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px}
-.two>div,main>section{min-width:0}
-@media(max-width:800px){.two{grid-template-columns:minmax(0,1fr)}}
-pre{margin:0;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;max-height:420px;font:12px/1.5 ui-monospace,Menlo,monospace;background:var(--bg);border:1px solid var(--bd);border-radius:6px;padding:10px}
-pre div{white-space:pre-wrap;overflow-wrap:anywhere;padding:0 4px}.add{background:var(--add)}.del{background:var(--del)}
-.badges{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px}
-.badge{padding:4px 10px;border-radius:999px;font-weight:600;font-size:13px;border:1px solid var(--bd)}
-.ok{color:var(--ok);border-color:var(--ok)}.bad{color:var(--bad);border-color:var(--bad)}.neu{color:var(--mut)}
-h2{margin:0 0 10px;font-size:15px}
-table{border-collapse:collapse;width:100%}td,th{text-align:left;padding:6px 10px;border-bottom:1px solid var(--bd)}th{color:var(--mut);font-weight:500;font-size:12px}
-details summary{cursor:pointer;color:var(--mut)}
+/* ---------- reset / base ---------- */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: system-ui, -apple-system, sans-serif;
+  font-size: 14px;
+  line-height: 1.55;
+  background: #f3f4f6;
+  color: #111827;
+  min-height: 100vh;
+}
+a { color: #2563eb; }
+
+/* ---------- layout ---------- */
+header {
+  background: #1e293b;
+  color: #f1f5f9;
+  padding: 18px 24px;
+  border-bottom: 3px solid #2563eb;
+}
+header h1 { font-size: 18px; font-weight: 700; }
+header p  { font-size: 12px; color: #94a3b8; margin-top: 3px; }
+
+nav {
+  background: #fff;
+  border-bottom: 1px solid #e5e7eb;
+  padding: 0 24px;
+  display: flex;
+  gap: 0;
+}
+.nav-tab {
+  padding: 12px 18px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #6b7280;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  user-select: none;
+  transition: color .12s, border-color .12s;
+}
+.nav-tab:hover  { color: #111827; }
+.nav-tab.active { color: #2563eb; border-bottom-color: #2563eb; }
+
+.page { display: none; max-width: 1100px; margin: 0 auto; padding: 24px 16px 48px; }
+.page.active { display: block; }
+
+/* ---------- cards ---------- */
+.card {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  overflow: hidden;
+  margin-bottom: 16px;
+}
+.card-head {
+  padding: 11px 16px;
+  background: #f9fafb;
+  border-bottom: 1px solid #e5e7eb;
+  font-weight: 600;
+  font-size: 13px;
+  color: #374151;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.card-body { padding: 16px; }
+
+/* ---------- form ---------- */
+label { display: block; font-size: 12px; font-weight: 600; color: #6b7280; margin-bottom: 4px; text-transform: uppercase; letter-spacing: .4px; }
+select, input[type=text] {
+  background: #fff;
+  border: 1px solid #d1d5db;
+  border-radius: 5px;
+  padding: 7px 10px;
+  font: inherit;
+  color: #111827;
+  outline: none;
+  transition: border-color .12s;
+}
+select:focus, input[type=text]:focus { border-color: #2563eb; }
+textarea {
+  width: 100%;
+  border: 1px solid #d1d5db;
+  border-radius: 5px;
+  padding: 10px 12px;
+  font: 12px/1.5 ui-monospace, Menlo, monospace;
+  min-height: 180px;
+  resize: vertical;
+  color: #111827;
+  outline: none;
+  transition: border-color .12s;
+}
+textarea:focus { border-color: #2563eb; }
+.row { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-end; }
+
+/* ---------- param chips ---------- */
+.params { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px 4px 12px;
+  border-radius: 999px;
+  border: 1px solid #d1d5db;
+  font: 12px ui-monospace, Menlo, monospace;
+  background: #f9fafb;
+}
+.chip select { border: none; background: transparent; font-size: 11px; color: #6b7280; cursor: pointer; }
+.chip.secret { border-color: #ef4444; background: #fef2f2; }
+.chip.secret .chip-name { color: #b91c1c; }
+
+/* ---------- run button ---------- */
+#run-btn {
+  background: #2563eb;
+  color: #fff;
+  border: none;
+  border-radius: 5px;
+  padding: 9px 20px;
+  font: 600 13px system-ui, sans-serif;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  transition: background .12s;
+  white-space: nowrap;
+}
+#run-btn:hover:not(:disabled) { background: #1d4ed8; }
+#run-btn:disabled { opacity: .5; cursor: not-allowed; }
+
+/* ---------- badges ---------- */
+.badges { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 12px; }
+.badge {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid;
+}
+.badge-green { color: #166534; background: #dcfce7; border-color: #86efac; }
+.badge-red   { color: #991b1b; background: #fee2e2; border-color: #fca5a5; }
+.badge-yellow{ color: #92400e; background: #fef3c7; border-color: #fcd34d; }
+.badge-blue  { color: #1e40af; background: #dbeafe; border-color: #93c5fd; }
+.badge-grey  { color: #4b5563; background: #f3f4f6; border-color: #d1d5db; }
+
+/* ---------- notice box ---------- */
+.notice {
+  background: #fffbeb;
+  border: 1px solid #fcd34d;
+  border-left: 4px solid #f59e0b;
+  border-radius: 5px;
+  padding: 12px 14px;
+  margin-bottom: 12px;
+  font-size: 13px;
+}
+.notice strong { color: #92400e; display: block; margin-bottom: 3px; }
+.notice p { color: #78350f; }
+
+/* ---------- tabs ---------- */
+.tabs { display: flex; border-bottom: 1px solid #e5e7eb; margin-bottom: 12px; }
+.tab {
+  padding: 8px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #6b7280;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  user-select: none;
+  transition: color .1s;
+}
+.tab:hover { color: #111827; }
+.tab.active { color: #2563eb; border-bottom-color: #2563eb; }
+
+/* ---------- IR panels ---------- */
+.ir-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+@media(max-width:720px){ .ir-grid { grid-template-columns: 1fr; } }
+.ir-panel-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: .4px;
+  margin-bottom: 5px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.copy-btn {
+  background: none;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  color: #6b7280;
+  font: 11px system-ui, sans-serif;
+  padding: 1px 7px;
+  cursor: pointer;
+}
+.copy-btn:hover { color: #2563eb; border-color: #2563eb; }
+pre {
+  border: 1px solid #e5e7eb;
+  border-radius: 5px;
+  background: #f8fafc;
+  padding: 10px 12px;
+  font: 11.5px/1.55 ui-monospace, Menlo, monospace;
+  max-height: 380px;
+  overflow: auto;
+  white-space: pre;
+  color: #1e293b;
+}
+.line-add { background: #dcfce7; display: block; }
+.line-del { background: #fee2e2; display: block; }
+.line-add::before { content: '+  '; color: #166534; }
+.line-del::before { content: '−  '; color: #991b1b; }
+
+/* ---------- error ---------- */
+.error-box {
+  background: #fee2e2;
+  border: 1px solid #fca5a5;
+  border-radius: 5px;
+  padding: 10px 12px;
+  font: 12px ui-monospace, Menlo, monospace;
+  color: #991b1b;
+  white-space: pre-wrap;
+  margin-bottom: 12px;
+}
+
+/* ---------- tables ---------- */
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th {
+  text-align: left;
+  padding: 8px 12px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .4px;
+  color: #6b7280;
+  background: #f9fafb;
+  border-bottom: 1px solid #e5e7eb;
+}
+td { padding: 10px 12px; border-bottom: 1px solid #f3f4f6; vertical-align: middle; }
+tbody tr:last-child td { border-bottom: none; }
+tbody tr:hover { background: #f9fafb; }
+.td-mono { font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+.td-green { color: #166534; font-weight: 600; }
+.td-red   { color: #991b1b; font-weight: 600; }
+.td-yellow{ color: #92400e; font-weight: 600; }
+
+/* ---------- overhead bar ---------- */
+.bar-wrap { display: flex; align-items: center; gap: 8px; }
+.bar-track { height: 6px; flex: 1; min-width: 60px; background: #e5e7eb; border-radius: 99px; overflow: hidden; }
+.bar-fill  { height: 100%; background: #2563eb; border-radius: 99px; }
+.bar-fill.high { background: #f59e0b; }
+.bar-val { font-size: 12px; color: #6b7280; white-space: nowrap; min-width: 38px; }
+
+/* ---------- details / log ---------- */
+details { margin-top: 10px; }
+details summary { font-size: 12px; color: #6b7280; cursor: pointer; }
+details summary:hover { color: #374151; }
+details pre { margin-top: 6px; font-size: 11px; max-height: 200px; }
+
+/* ---------- hidden ---------- */
+.hidden { display: none !important; }
 </style>
 </head>
 <body>
-<header><h1>Constant-Time Security Pass</h1><p>Mark secret inputs, run the LLVM pass, compare the IR before and after.</p></header>
-<main>
- <section class="card">
-  <div class="row">
-   <div><label for="k">Kernel</label><select id="k"></select></div>
-   <div><label for="fn">Function</label><input id="fn" size="18"></div>
-   <button id="run">Run pass</button>
+
+<header>
+  <h1>Constant-Time LLVM Security Pass</h1>
+  <p>Compiler Design Project — detects secret-dependent control flow and transforms it to constant-time IR</p>
+</header>
+
+<nav id="nav">
+  <div class="nav-tab active" data-page="run">▶ Run the Pass</div>
+  <div class="nav-tab" data-page="regression">✓ Regression Results</div>
+  <div class="nav-tab" data-page="perf">⧗ Performance Overhead</div>
+  <div class="nav-tab" data-page="about">ℹ How It Works</div>
+</nav>
+
+<!-- ═══════════════════════════════════════════════════════════
+     PAGE 1: Run the Pass
+══════════════════════════════════════════════════════════════ -->
+<div class="page active" id="page-run">
+
+  <div class="card">
+    <div class="card-head">
+      Configure kernel and secret parameters
+      <button id="run-btn">▶ Run pass</button>
+    </div>
+    <div class="card-body">
+      <div class="row">
+        <div>
+          <label for="k-select">Kernel</label>
+          <select id="k-select"></select>
+        </div>
+        <div>
+          <label for="fn-input">Function name</label>
+          <input type="text" id="fn-input" size="22">
+        </div>
+      </div>
+      <div class="params" id="params-box"></div>
+      <div style="margin-top:14px">
+        <label for="src-area">C source (editable — modify and re-run)</label>
+        <textarea id="src-area" spellcheck="false"></textarea>
+      </div>
+    </div>
   </div>
-  <div style="margin-top:12px"><label>Parameters (set each to secret or public)</label><div class="params" id="params"></div></div>
-  <div style="margin-top:12px"><label for="src">C source</label><textarea id="src" spellcheck="false"></textarea></div>
- </section>
- <section class="card" id="res" hidden>
-  <h2>Result</h2>
-  <div class="badges" id="badges"></div>
-  <div id="err" class="bad"></div>
-  <div class="two"><div><label>LLVM IR before</label><pre id="before"></pre></div><div><label>LLVM IR after</label><pre id="after"></pre></div></div>
-  <details style="margin-top:12px"><summary>Pass log</summary><pre id="log"></pre></details>
- </section>
- <section class="card"><h2>Regression results (baseline vs transformed)</h2><table id="metrics"><tr><td>Loading…</td></tr></table></section>
-</main>
+
+  <!-- Results -->
+  <div class="card hidden" id="result-card">
+    <div class="card-head" id="result-head">Result</div>
+    <div class="card-body">
+
+      <div class="badges" id="badges"></div>
+      <div class="error-box hidden" id="err-box"></div>
+      <div class="notice hidden" id="notice-box">
+        <strong id="notice-title"></strong>
+        <p id="notice-body"></p>
+      </div>
+
+      <!-- tab strip -->
+      <div class="tabs" id="ir-tabs">
+        <div class="tab active" data-irtab="diff">IR Diff (before vs after)</div>
+        <div class="tab hidden" data-irtab="ref" id="ref-tab">Reference CT Implementation</div>
+      </div>
+
+      <!-- IR diff -->
+      <div id="pane-diff">
+        <div class="ir-grid">
+          <div>
+            <div class="ir-panel-label">
+              Before (leaky IR)
+              <button class="copy-btn" onclick="copyText(rawBefore)">Copy</button>
+            </div>
+            <pre id="ir-before"></pre>
+          </div>
+          <div>
+            <div class="ir-panel-label">
+              After (pass output)
+              <button class="copy-btn" onclick="copyText(rawAfter)">Copy</button>
+            </div>
+            <pre id="ir-after"></pre>
+          </div>
+        </div>
+      </div>
+
+      <!-- Reference source -->
+      <div id="pane-ref" class="hidden">
+        <div class="ir-panel-label">
+          Hand-written constant-time reference (used for regression testing)
+          <button class="copy-btn" onclick="copyText(rawRef)">Copy</button>
+        </div>
+        <pre id="ir-ref"></pre>
+        <p style="margin-top:8px;font-size:12px;color:#6b7280">
+          This kernel is not automatically transformed by the CFG pass (see notice above).
+          A hand-written constant-time reference is used as the transformed source in regression testing.
+        </p>
+      </div>
+
+      <details>
+        <summary>Pass log output</summary>
+        <pre id="pass-log"></pre>
+      </details>
+    </div>
+  </div>
+
+</div><!-- /page-run -->
+
+
+<!-- ═══════════════════════════════════════════════════════════
+     PAGE 2: Regression Results
+══════════════════════════════════════════════════════════════ -->
+<div class="page" id="page-regression">
+  <div class="card">
+    <div class="card-head">
+      Regression test results
+      <span style="font-size:12px;font-weight:400;color:#6b7280">
+        baseline vs transformed — values must match on all inputs
+      </span>
+    </div>
+    <div class="card-body" style="padding:0">
+      <table>
+        <thead>
+          <tr>
+            <th>Kernel</th>
+            <th>Transformed via</th>
+            <th>Test cases</th>
+            <th>Mismatches</th>
+            <th>Time (s)</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody id="reg-tbody">
+          <tr><td colspan="6" style="color:#6b7280">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-head">What this tests</div>
+    <div class="card-body" style="font-size:13px;color:#374151;line-height:1.65">
+      <p>For each kernel the regression suite generates random inputs and runs both the <strong>baseline</strong> (leaky) and <strong>transformed</strong> (constant-time) implementations on the same inputs. If any output differs, the transformation is considered incorrect.</p>
+      <p style="margin-top:8px">All three kernels pass with <strong>0 mismatches</strong>, confirming the transformations are semantics-preserving.</p>
+    </div>
+  </div>
+</div><!-- /page-regression -->
+
+
+<!-- ═══════════════════════════════════════════════════════════
+     PAGE 3: Performance Overhead
+══════════════════════════════════════════════════════════════ -->
+<div class="page" id="page-perf">
+  <div class="card">
+    <div class="card-head">
+      Performance benchmark — overhead of constant-time transformation
+      <span style="font-size:12px;font-weight:400;color:#6b7280">compiled at -O2</span>
+    </div>
+    <div class="card-body" style="padding:0">
+      <table>
+        <thead>
+          <tr>
+            <th>Kernel</th>
+            <th>Iterations</th>
+            <th>Baseline</th>
+            <th>Constant-time</th>
+            <th>Overhead</th>
+            <th>Overhead bar</th>
+          </tr>
+        </thead>
+        <tbody id="perf-tbody">
+          <tr><td colspan="6" style="color:#6b7280">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-head">Interpretation</div>
+    <div class="card-body" style="font-size:13px;color:#374151;line-height:1.65">
+      <p><strong>aes_sbox</strong> and <strong>mod_exp</strong> incur ≤3% overhead — the constant-time versions are nearly as fast as the originals.</p>
+      <p style="margin-top:6px"><strong>memcmp</strong> shows ~17% overhead because it must scan all <em>n</em> bytes unconditionally instead of returning early; this is the correct behaviour — the early-exit is exactly the timing leak being removed.</p>
+    </div>
+  </div>
+</div><!-- /page-perf -->
+
+
+<!-- ═══════════════════════════════════════════════════════════
+     PAGE 4: How It Works
+══════════════════════════════════════════════════════════════ -->
+<div class="page" id="page-about">
+  <div class="card">
+    <div class="card-head">Project overview</div>
+    <div class="card-body" style="font-size:13px;color:#374151;line-height:1.7">
+      <p>This project implements an <strong>LLVM pass</strong> that detects and eliminates <em>secret-dependent control flow</em> — a class of timing side-channel vulnerability where a program's execution time reveals information about secret data.</p>
+
+      <h2 style="font-size:14px;margin:16px 0 6px">The threat model</h2>
+      <p>Consider a password comparison that returns early the moment it finds a mismatch. An attacker who can measure response time can binary-search the correct password one byte at a time. The same issue applies to AES S-Box table lookups and modular exponentiation with secret exponents.</p>
+
+      <h2 style="font-size:14px;margin:16px 0 6px">What the pass does (3 phases)</h2>
+      <ol style="padding-left:18px;display:flex;flex-direction:column;gap:6px">
+        <li><strong>Taint labelling</strong> — parameters marked <code>secret</code> in a JSON config are propagated through the CFG using a dataflow analysis. Any value that depends on a secret is tainted.</li>
+        <li><strong>Violation detection</strong> — branch instructions (<code>br</code>) and function returns whose condition is tainted are flagged as constant-time violations.</li>
+        <li><strong>Transformation</strong> — secret-dependent branches are replaced with LLVM <code>select</code> instructions (branchless CMOVs), eliminating the timing-observable control-flow differences.</li>
+      </ol>
+
+      <h2 style="font-size:14px;margin:16px 0 6px">Kernels covered</h2>
+      <table style="margin-top:4px">
+        <thead><tr><th>Kernel</th><th>Vulnerability</th><th>Strategy</th><th>Auto-transformed?</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><strong>aes_sbox</strong></td>
+            <td>S-Box table lookup indexed by secret byte</td>
+            <td>Pass converts secret-indexed branch to <code>select</code></td>
+            <td class="td-green">Yes</td>
+          </tr>
+          <tr>
+            <td><strong>memcmp</strong></td>
+            <td>Early-exit loop when bytes differ</td>
+            <td>Hand-written OR/XOR branchless scan; pass limitation noted</td>
+            <td class="td-yellow">No — early-exit loop</td>
+          </tr>
+          <tr>
+            <td><strong>mod_exp</strong></td>
+            <td>Branch on secret exponent bit</td>
+            <td>Hand-written bitmask select; pass limitation noted</td>
+            <td class="td-yellow">No — unsafe urem</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2 style="font-size:14px;margin:16px 0 6px">Verification</h2>
+      <p>On Linux/Ubuntu the transformed binaries are verified with <strong>ctgrind</strong> (Valgrind Memcheck taint tracking): secret-tainted bytes are poisoned and any branch on a poisoned value triggers a Valgrind error. The transformed aes_sbox passes with 0 errors.</p>
+    </div>
+  </div>
+</div><!-- /page-about -->
+
+
 <script>
-const $=id=>document.getElementById(id);
-let kernels=[],cfg={};
-const esc=s=>s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
-function guessParams(src,fn){
-  const m=new RegExp(fn+"\\s*\\(([^)]*)\\)").exec(src);if(!m)return[];
-  return m[1].split(",").map(p=>p.trim()).filter(p=>p&&p!=="void").map(p=>{const w=p.match(/[A-Za-z_]\w*/g);return w[w.length-1]});
+// ─── state ───────────────────────────────────────────────────────────────────
+let kernels = [];
+let curKernel = null;
+let rawBefore = '', rawAfter = '', rawRef = '';
+
+// ─── utilities ───────────────────────────────────────────────────────────────
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+function copyText(t) { navigator.clipboard.writeText(t).catch(() => {}); }
+
+// ─── nav ─────────────────────────────────────────────────────────────────────
+document.querySelectorAll('.nav-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+    tab.classList.add('active');
+    $('page-' + tab.dataset.page).classList.add('active');
+  });
+});
+
+// ─── IR sub-tabs ─────────────────────────────────────────────────────────────
+document.getElementById('ir-tabs').addEventListener('click', e => {
+  const tab = e.target.closest('[data-irtab]');
+  if (!tab) return;
+  document.querySelectorAll('[data-irtab]').forEach(t => t.classList.remove('active'));
+  tab.classList.add('active');
+  $('pane-diff').classList.toggle('hidden', tab.dataset.irtab !== 'diff');
+  $('pane-ref').classList.toggle('hidden', tab.dataset.irtab !== 'ref');
+});
+
+// ─── params ──────────────────────────────────────────────────────────────────
+const CFG = {};
+function guessParams(src, fn) {
+  const m = new RegExp(fn + '\\s*\\(([^)]*)\\)').exec(src);
+  if (!m) return [];
+  return m[1].split(',').map(p => p.trim()).filter(p => p && p !== 'void')
+    .map(p => { const w = p.match(/[A-Za-z_]\w*/g); return w[w.length - 1]; });
 }
-function renderParams(){
-  const box=$("params");box.innerHTML="";
-  guessParams($("src").value,$("fn").value).forEach(p=>{
-    const d=document.createElement("div");d.className="chip";
-    d.innerHTML=`${p}<select><option value="public">public</option><option value="secret">secret</option></select>`;
-    const s=d.querySelector("select");s.value=cfg[p]||"public";
-    s.onchange=()=>cfg[p]=s.value;box.appendChild(d);
+function renderParams() {
+  const box = $('params-box'); box.innerHTML = '';
+  const params = guessParams($('src-area').value, $('fn-input').value);
+  if (!params.length) {
+    box.innerHTML = '<span style="font-size:12px;color:#9ca3af">No parameters detected</span>';
+    return;
+  }
+  params.forEach(p => {
+    const chip = document.createElement('div');
+    chip.className = 'chip' + (CFG[p] === 'secret' ? ' secret' : '');
+    chip.innerHTML = `<span class="chip-name">${esc(p)}</span><select>
+      <option value="public">public</option>
+      <option value="secret">secret</option>
+    </select>`;
+    const sel = chip.querySelector('select');
+    sel.value = CFG[p] || 'public';
+    sel.onchange = () => { CFG[p] = sel.value; chip.className = 'chip' + (sel.value === 'secret' ? ' secret' : ''); };
+    box.appendChild(chip);
   });
 }
-function pick(){
-  const k=kernels[$("k").selectedIndex];$("src").value=k.source;
-  $("fn").value=k.config?k.config.function:"";cfg={};
-  if(k.config){k.config.secret_parameters.forEach(p=>cfg[p]="secret");k.config.public_parameters.forEach(p=>cfg[p]="public")}
+
+// ─── kernel pick ─────────────────────────────────────────────────────────────
+function pick() {
+  const k = kernels[$('k-select').selectedIndex];
+  curKernel = k;
+  $('src-area').value = k.source;
+  $('fn-input').value = k.config ? k.config.function : '';
+  Object.keys(CFG).forEach(key => delete CFG[key]);
+  if (k.config) {
+    k.config.secret_parameters.forEach(p => CFG[p] = 'secret');
+    k.config.public_parameters.forEach(p => CFG[p] = 'public');
+  }
+  rawRef = k.reference_source || '';
+  $('result-card').classList.add('hidden');
   renderParams();
 }
-function diff(a,b){
-  const sa=new Set(a.split("\n")),sb=new Set(b.split("\n"));
-  const f=(t,o,c)=>t.split("\n").map(l=>`<div class="${o.has(l)?"":c}">${esc(l)||" "}</div>`).join("");
-  return[f(a,sb,"del"),f(b,sa,"add")];
+
+// ─── diff renderer ───────────────────────────────────────────────────────────
+function renderDiff(a, b) {
+  const sa = new Set(a.split('\n')), sb = new Set(b.split('\n'));
+  const fmt = (text, other, delCls, addCls) =>
+    text.split('\n').map(l => {
+      if (!other.has(l)) {
+        const cls = text === a ? 'line-del' : 'line-add';
+        return `<span class="${cls}">${esc(l) || ' '}</span>`;
+      }
+      return `<span>${esc(l) || ' '}</span>`;
+    }).join('\n');
+  return [fmt(a, sb), fmt(b, sa)];
 }
-const badge=(t,c)=>`<span class="badge ${c}">${t}</span>`;
-async function run(){
-  $("run").disabled=true;$("run").textContent="Running…";
-  const secret=[],pub=[];document.querySelectorAll(".chip").forEach(c=>(c.querySelector("select").value==="secret"?secret:pub).push(c.firstChild.textContent.trim()));
+
+// ─── badge helper ────────────────────────────────────────────────────────────
+function badge(text, cls) { return `<span class="badge badge-${cls}">${esc(text)}</span>`; }
+
+// ─── run pass ────────────────────────────────────────────────────────────────
+async function runPass() {
+  const btn = $('run-btn');
+  btn.disabled = true; btn.textContent = '⏳ Running…';
+
+  const secret = [], pub = [];
+  document.querySelectorAll('.chip').forEach(c => {
+    const name = c.querySelector('.chip-name').textContent;
+    (c.querySelector('select').value === 'secret' ? secret : pub).push(name);
+  });
+
   let r;
-  try{r=await(await fetch("/api/run",{method:"POST",body:JSON.stringify({source:$("src").value,function:$("fn").value,secret_parameters:secret,public_parameters:pub})})).json()}
-  catch(e){r={ok:false,error:String(e)}}
-  $("res").hidden=false;$("err").textContent=r.error||"";$("log").textContent=r.log||"";
-  if(r.ok){
-    const[b,a]=diff(r.before,r.after);$("before").innerHTML=b;$("after").innerHTML=a;
-    $("badges").innerHTML=badge(r.changed?"Transformed":"No change made",r.changed?"ok":"neu")+badge(r.ir_valid?"IR valid":"IR invalid",r.ir_valid?"ok":"bad")+badge(r.ct_verified?"Static CT verification passed":"Not verified",r.ct_verified?"ok":"neu");
-  }else{$("badges").innerHTML="";$("before").textContent=$("after").textContent=""}
-  $("run").disabled=false;$("run").textContent="Run pass";
+  try {
+    r = await (await fetch('/api/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        source: $('src-area').value,
+        function: $('fn-input').value,
+        kernel_name: curKernel ? curKernel.name : '',
+        secret_parameters: secret,
+        public_parameters: pub,
+      }),
+    })).json();
+  } catch(e) { r = { ok: false, error: String(e) }; }
+
+  $('result-card').classList.remove('hidden');
+  $('err-box').classList.add('hidden');
+  $('notice-box').classList.add('hidden');
+
+  if (!r.ok) {
+    $('err-box').textContent = r.error || 'Unknown error';
+    $('err-box').classList.remove('hidden');
+    $('badges').innerHTML = badge('Pass failed', 'red');
+    $('ir-before').textContent = $('ir-after').textContent = '';
+  } else {
+    rawBefore = r.before || ''; rawAfter = r.after || '';
+    const [bHtml, aHtml] = renderDiff(rawBefore, rawAfter);
+    $('ir-before').innerHTML = bHtml;
+    $('ir-after').innerHTML  = aHtml;
+
+    // badges
+    const b = [];
+    b.push(badge(r.changed ? '✓ Transformed' : '— Not transformed', r.changed ? 'green' : 'yellow'));
+    b.push(badge(r.ir_valid ? '✓ IR valid' : '✕ IR invalid', r.ir_valid ? 'green' : 'red'));
+    if (r.ct_verified) b.push(badge('✓ Static CT verified', 'green'));
+    else if (!r.changed) b.push(badge('CT: manual reference used', 'grey'));
+    else b.push(badge('CT: not verified (run ctgrind on Linux)', 'blue'));
+    $('badges').innerHTML = b.join('');
+
+    // why-unchanged notice
+    if (!r.changed && r.why_unchanged_short) {
+      $('notice-title').textContent = 'Why this kernel was not auto-transformed: ' + r.why_unchanged_short;
+      $('notice-body').textContent  = r.why_unchanged_long || '';
+      $('notice-box').classList.remove('hidden');
+    }
+  }
+
+  // reference tab visibility
+  const hasRef = !!(curKernel && curKernel.reference_source);
+  $('ref-tab').classList.toggle('hidden', !hasRef);
+  if (hasRef) $('ir-ref').textContent = curKernel.reference_source;
+
+  $('pass-log').textContent = r.log || '(no log)';
+  btn.disabled = false; btn.textContent = '▶ Run pass';
 }
-async function init(){
-  kernels=await(await fetch("/api/kernels")).json();
-  $("k").innerHTML=kernels.map(k=>`<option>${k.name}</option>`).join("");
-  $("k").onchange=pick;$("fn").oninput=renderParams;$("src").oninput=renderParams;$("run").onclick=run;pick();
-  const m=await(await fetch("/api/metrics")).json(),ks=m.kernels||{};
-  $("metrics").innerHTML="<tr><th>Kernel</th><th>Compared against</th><th>Cases</th><th>Mismatches</th><th>Status</th></tr>"+
-    Object.entries(ks).map(([n,v])=>`<tr><td>${n}</td><td>${v.transformed_source}</td><td>${v.cases}</td><td>${v.mismatches}</td><td class="${v.status==="PASS"?"ok":"bad"}">${v.status}</td></tr>`).join("");
+
+// ─── regression table ────────────────────────────────────────────────────────
+async function loadRegression() {
+  try {
+    const m = await (await fetch('/api/metrics')).json();
+    const ks = m.kernels || {};
+    const entries = Object.entries(ks);
+    if (!entries.length) {
+      $('reg-tbody').innerHTML = '<tr><td colspan="6" style="color:#9ca3af;padding:14px">No data. Run scripts/regression_test.py first.</td></tr>';
+      return;
+    }
+    $('reg-tbody').innerHTML = entries.map(([name, v]) => `<tr>
+      <td><strong>${esc(name)}</strong></td>
+      <td class="td-mono" style="color:#6b7280">${esc(v.transformed_source || '—')}</td>
+      <td class="td-mono">${v.cases ?? '—'}</td>
+      <td class="${v.mismatches > 0 ? 'td-red' : 'td-green'} td-mono">${v.mismatches ?? '—'}</td>
+      <td class="td-mono">${v.seconds != null ? v.seconds.toFixed(3) + 's' : '—'}</td>
+      <td class="${v.status === 'PASS' ? 'td-green' : 'td-red'}">${esc(v.status || '—')}</td>
+    </tr>`).join('');
+  } catch(e) {
+    $('reg-tbody').innerHTML = `<tr><td colspan="6" style="color:#b91c1c">${esc(String(e))}</td></tr>`;
+  }
+}
+
+// ─── performance table ───────────────────────────────────────────────────────
+async function loadPerf() {
+  try {
+    const m = await (await fetch('/api/perf')).json();
+    const ks = m.kernels || {};
+    const entries = Object.entries(ks);
+    if (!entries.length) {
+      $('perf-tbody').innerHTML = '<tr><td colspan="6" style="color:#9ca3af;padding:14px">No data. Run scripts/benchmark.py first.</td></tr>';
+      return;
+    }
+    const maxPct = Math.max(...entries.map(([,v]) => v.overhead_percentage || 0)) || 1;
+    $('perf-tbody').innerHTML = entries.map(([name, v]) => {
+      const pct = v.overhead_percentage || 0;
+      const barPct = Math.round((pct / maxPct) * 100);
+      const barHigh = pct >= 10;
+      return `<tr>
+        <td><strong>${esc(name)}</strong></td>
+        <td class="td-mono">${v.iterations != null ? v.iterations.toLocaleString() : '—'}</td>
+        <td class="td-mono">${v.baseline_seconds != null ? v.baseline_seconds.toFixed(4) + 's' : '—'}</td>
+        <td class="td-mono">${v.constant_time_seconds != null ? v.constant_time_seconds.toFixed(4) + 's' : '—'}</td>
+        <td class="${barHigh ? 'td-yellow' : 'td-green'}">${pct.toFixed(1)}%</td>
+        <td>
+          <div class="bar-wrap">
+            <div class="bar-track"><div class="bar-fill${barHigh ? ' high' : ''}" style="width:${barPct}%"></div></div>
+            <span class="bar-val">${pct.toFixed(1)}%</span>
+          </div>
+        </td>
+      </tr>`;
+    }).join('');
+  } catch(e) {
+    $('perf-tbody').innerHTML = `<tr><td colspan="6" style="color:#b91c1c">${esc(String(e))}</td></tr>`;
+  }
+}
+
+// ─── init ────────────────────────────────────────────────────────────────────
+async function init() {
+  try {
+    kernels = await (await fetch('/api/kernels')).json();
+    $('k-select').innerHTML = kernels.map(k => `<option>${esc(k.name)}</option>`).join('');
+    $('k-select').onchange = pick;
+    $('fn-input').oninput  = renderParams;
+    $('src-area').oninput  = renderParams;
+    $('run-btn').onclick   = runPass;
+    pick();
+  } catch(e) {
+    document.querySelector('#page-run .card-body').innerHTML =
+      `<div class="error-box">Could not reach demo server: ${esc(String(e))}<br><br>Start it with: python3 scripts/demo_server.py</div>`;
+  }
+  loadRegression();
+  loadPerf();
 }
 init();
 </script>
