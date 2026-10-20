@@ -113,13 +113,11 @@ class TestConstantTimeTransformer(unittest.TestCase):
 
         output = self.run_opt(source, config)
 
-
         self.assertIn("icmp eq", output)
         self.assertIn("sext i1", output)
         self.assertIn("and i8", output)
         self.assertIn("or i8", output)
         self.assertNotIn("load i8, ptr %arrayidx", output)
-
 
     def test_mod_exp_unsafe_remainder_keeps_branch(self):
         source = """
@@ -151,6 +149,40 @@ class TestConstantTimeTransformer(unittest.TestCase):
 
         self.assertIn("urem i64", output)
         self.assertIn("br i1 %tobool", output)
+
+
+    def test_memcmp_style_function_has_no_early_mismatch_return(self):
+        source = """
+        int secret_memcmp(
+            const unsigned char *a,
+            const unsigned char *b,
+            int n)
+        {
+            int mismatch = 0;
+
+            for (int i = 0; i < n; i++) {
+                mismatch |= (a[i] != b[i]);
+            }
+
+            return mismatch != 0;
+        }
+        """
+
+        config = """
+        {
+            "secret_parameters": ["a", "b"],
+            "public_parameters": ["n"]
+        }
+        """
+
+        output = self.run_opt(source, config)
+
+        self.assertIn("define", output)
+        self.assertIn("secret_memcmp", output)
+        self.assertIn("icmp ne i32", output)
+        self.assertIn("or i32", output)
+        self.assertIn("br i1 %cmp,", output)
+        self.assertNotIn("br i1 %cmp4,", output)
 
     def test_transformed_ir_is_valid(self):
         source = """

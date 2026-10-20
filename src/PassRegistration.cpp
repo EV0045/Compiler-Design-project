@@ -1,3 +1,4 @@
+
 #include "ConstantTimeTransformer.h"
 #include "SecrecyLabeller.h"
 #include "TaintEngine.h"
@@ -20,13 +21,10 @@ static cl::opt<std::string> CTConfig(
     cl::desc("Path to constant-time secrecy configuration JSON"),
     cl::init(""));
 
-namespace
-{
+namespace {
 
-struct ConstantTimePass : PassInfoMixin<ConstantTimePass>
-{
-    PreservedAnalyses run(Module &M, ModuleAnalysisManager &MAM)
-    {
+struct ConstantTimePass : PassInfoMixin<ConstantTimePass> {
+    PreservedAnalyses run(Module &M, ModuleAnalysisManager &MAM) {
         if (CTConfig.empty()) {
             errs() << "Error: -ct-config is required\n";
             return PreservedAnalyses::all();
@@ -51,8 +49,8 @@ struct ConstantTimePass : PassInfoMixin<ConstantTimePass>
 
             engine.initialize(initialLabels);
             engine.analyze(F);
-                        ct_pass::ViolationDetector detector;
 
+            ct_pass::ViolationDetector detector;
             auto violations = detector.detectViolations(F, engine);
 
             if (violations.empty()) {
@@ -60,7 +58,6 @@ struct ConstantTimePass : PassInfoMixin<ConstantTimePass>
             }
 
             ct_pass::ConstantTimeTransformer transformer;
-
             bool changed = transformer.transformFunction(F, violations);
 
             if (changed) {
@@ -86,8 +83,13 @@ struct ConstantTimePass : PassInfoMixin<ConstantTimePass>
             } else {
                 errs() << "CT transformation made no changes for function: "
                        << F.getName() << "\n";
-            }
 
+                errs() << "Detected violations remain untransformed:\n";
+
+                for (const auto &leak : violations) {
+                    leak.dump();
+                }
+            }
         }
 
         return PreservedAnalyses::none();
@@ -96,19 +98,16 @@ struct ConstantTimePass : PassInfoMixin<ConstantTimePass>
 
 }
 
-extern "C" LLVM_ATTRIBUTE_WEAK PassPluginLibraryInfo llvmGetPassPluginInfo()
-{
+extern "C" LLVM_ATTRIBUTE_WEAK PassPluginLibraryInfo llvmGetPassPluginInfo() {
     return {
         LLVM_PLUGIN_API_VERSION,
         "ConstantTimePass",
         LLVM_VERSION_STRING,
-        [](PassBuilder &PB)
-        {
+        [](PassBuilder &PB) {
             PB.registerPipelineParsingCallback(
                 [](StringRef Name,
                    ModulePassManager &MPM,
-                   ArrayRef<PassBuilder::PipelineElement>)
-                {
+                   ArrayRef<PassBuilder::PipelineElement>) {
                     if (Name == "constant-time-pass") {
                         MPM.addPass(ConstantTimePass());
                         return true;
@@ -119,4 +118,3 @@ extern "C" LLVM_ATTRIBUTE_WEAK PassPluginLibraryInfo llvmGetPassPluginInfo()
         }
     };
 }
-
