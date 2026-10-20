@@ -114,7 +114,12 @@ def main():
     metrics = {"seed": args.seed, "random_cases": args.random, "kernels": {}}
     failed = False
 
-    with tempfile.TemporaryDirectory() as tmp:
+    try:
+        tmp_ctx = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+    except TypeError:
+        tmp_ctx = tempfile.TemporaryDirectory()
+
+    with tmp_ctx as tmp:
         tmp = Path(tmp)
         for name, fn in TESTS.items():
             entry = {}

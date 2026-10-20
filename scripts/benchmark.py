@@ -199,7 +199,12 @@ def main():
     print("CONSTANT-TIME SECURITY PASS — PERFORMANCE BENCHMARK")
     print("=" * 70)
 
-    with tempfile.TemporaryDirectory() as td:
+    try:
+        td_ctx = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+    except TypeError:
+        td_ctx = tempfile.TemporaryDirectory()
+
+    with td_ctx as td:
         tdp = Path(td)
         dll_ext = ".dll" if sys.platform == "win32" else ".so"
 
