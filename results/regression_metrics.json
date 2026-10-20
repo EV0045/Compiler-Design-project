@@ -1,27 +1,27 @@
 {
   "seed": 1234,
-  "random_cases": 50,
+  "random_cases": 2000,
   "kernels": {
     "aes_sbox": {
-      "transformed_source": "reference",
+      "transformed_source": "pass-output",
       "cases": 256,
-      "mismatches": 0,
-      "status": "PASS",
-      "seconds": 0.0
-    },
-    "memcmp": {
-      "transformed_source": "reference",
-      "cases": 55,
       "mismatches": 0,
       "status": "PASS",
       "seconds": 0.001
     },
-    "mod_exp": {
-      "transformed_source": "reference",
-      "cases": 57,
+    "memcmp": {
+      "transformed_source": "pass-output",
+      "cases": 2005,
       "mismatches": 0,
       "status": "PASS",
-      "seconds": 0.0
+      "seconds": 0.03
+    },
+    "mod_exp": {
+      "transformed_source": "pass-output",
+      "cases": 2007,
+      "mismatches": 0,
+      "status": "PASS",
+      "seconds": 0.008
     }
   }
 }

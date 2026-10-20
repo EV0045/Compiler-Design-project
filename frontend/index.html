@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Constant-Time Pass Demo</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--fg:#1c2230;--mut:#667085;--bd:#dfe3ea;--ac:#2f5bea;--ok:#12805c;--bad:#c0392b;--add:#e6f6ec;--del:#fdecea}
+@media (prefers-color-scheme:dark){:root{--bg:#12151c;--card:#1a1f2a;--fg:#e6e9ef;--mut:#9aa4b5;--bd:#2c3342;--ac:#7c9cff;--ok:#4fd1a1;--bad:#ff8a7a;--add:#12301f;--del:#3a1b18}}
+*{box-sizing:border-box}
+body{margin:0;overflow-x:hidden;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,sans-serif}
+header{padding:20px 16px 8px;max-width:1200px;margin:auto}
+h1{margin:0;font-size:22px}header p{margin:4px 0 0;color:var(--mut)}
+main{max-width:1200px;margin:auto;padding:8px 16px 40px;display:grid;grid-template-columns:minmax(0,1fr);gap:16px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:16px}
+.row{display:flex;flex-wrap:wrap;gap:12px;align-items:end}
+label{display:block;font-size:12px;color:var(--mut);margin-bottom:4px}
+select,input,textarea{background:var(--bg);color:var(--fg);border:1px solid var(--bd);border-radius:6px;padding:7px 9px;font:inherit}
+textarea{width:100%;font:13px/1.45 ui-monospace,Menlo,monospace;min-height:220px;resize:vertical}
+button{background:var(--ac);color:#fff;border:0;border-radius:6px;padding:9px 18px;font:inherit;font-weight:600;cursor:pointer}
+button:disabled{opacity:.5}
+.params{display:flex;flex-wrap:wrap;gap:8px}
+.chip{border:1px solid var(--bd);border-radius:999px;padding:4px 6px 4px 12px;display:flex;gap:8px;align-items:center;font:13px ui-monospace,Menlo,monospace}
+.chip select{padding:2px 4px;font-size:12px}
+.two{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px}
+.two>div,main>section{min-width:0}
+@media(max-width:800px){.two{grid-template-columns:minmax(0,1fr)}}
+pre{margin:0;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;max-height:420px;font:12px/1.5 ui-monospace,Menlo,monospace;background:var(--bg);border:1px solid var(--bd);border-radius:6px;padding:10px}
+pre div{white-space:pre-wrap;overflow-wrap:anywhere;padding:0 4px}.add{background:var(--add)}.del{background:var(--del)}
+.badges{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px}
+.badge{padding:4px 10px;border-radius:999px;font-weight:600;font-size:13px;border:1px solid var(--bd)}
+.ok{color:var(--ok);border-color:var(--ok)}.bad{color:var(--bad);border-color:var(--bad)}.neu{color:var(--mut)}
+h2{margin:0 0 10px;font-size:15px}
+table{border-collapse:collapse;width:100%}td,th{text-align:left;padding:6px 10px;border-bottom:1px solid var(--bd)}th{color:var(--mut);font-weight:500;font-size:12px}
+details summary{cursor:pointer;color:var(--mut)}
+</style>
+</head>
+<body>
+<header><h1>Constant-Time Security Pass</h1><p>Mark secret inputs, run the LLVM pass, compare the IR before and after.</p></header>
+<main>
+ <section class="card">
+  <div class="row">
+   <div><label for="k">Kernel</label><select id="k"></select></div>
+   <div><label for="fn">Function</label><input id="fn" size="18"></div>
+   <button id="run">Run pass</button>
+  </div>
+  <div style="margin-top:12px"><label>Parameters (set each to secret or public)</label><div class="params" id="params"></div></div>
+  <div style="margin-top:12px"><label for="src">C source</label><textarea id="src" spellcheck="false"></textarea></div>
+ </section>
+ <section class="card" id="res" hidden>
+  <h2>Result</h2>
+  <div class="badges" id="badges"></div>
+  <div id="err" class="bad"></div>
+  <div class="two"><div><label>LLVM IR before</label><pre id="before"></pre></div><div><label>LLVM IR after</label><pre id="after"></pre></div></div>
+  <details style="margin-top:12px"><summary>Pass log</summary><pre id="log"></pre></details>
+ </section>
+ <section class="card"><h2>Regression results (baseline vs transformed)</h2><table id="metrics"><tr><td>Loading…</td></tr></table></section>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+let kernels=[],cfg={};
+const esc=s=>s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+function guessParams(src,fn){
+  const m=new RegExp(fn+"\\s*\\(([^)]*)\\)").exec(src);if(!m)return[];
+  return m[1].split(",").map(p=>p.trim()).filter(p=>p&&p!=="void").map(p=>{const w=p.match(/[A-Za-z_]\w*/g);return w[w.length-1]});
+}
+function renderParams(){
+  const box=$("params");box.innerHTML="";
+  guessParams($("src").value,$("fn").value).forEach(p=>{
+    const d=document.createElement("div");d.className="chip";
+    d.innerHTML=`${p}<select><option value="public">public</option><option value="secret">secret</option></select>`;
+    const s=d.querySelector("select");s.value=cfg[p]||"public";
+    s.onchange=()=>cfg[p]=s.value;box.appendChild(d);
+  });
+}
+function pick(){
+  const k=kernels[$("k").selectedIndex];$("src").value=k.source;
+  $("fn").value=k.config?k.config.function:"";cfg={};
+  if(k.config){k.config.secret_parameters.forEach(p=>cfg[p]="secret");k.config.public_parameters.forEach(p=>cfg[p]="public")}
+  renderParams();
+}
+function diff(a,b){
+  const sa=new Set(a.split("\n")),sb=new Set(b.split("\n"));
+  const f=(t,o,c)=>t.split("\n").map(l=>`<div class="${o.has(l)?"":c}">${esc(l)||" "}</div>`).join("");
+  return[f(a,sb,"del"),f(b,sa,"add")];
+}
+const badge=(t,c)=>`<span class="badge ${c}">${t}</span>`;
+async function run(){
+  $("run").disabled=true;$("run").textContent="Running…";
+  const secret=[],pub=[];document.querySelectorAll(".chip").forEach(c=>(c.querySelector("select").value==="secret"?secret:pub).push(c.firstChild.textContent.trim()));
+  let r;
+  try{r=await(await fetch("/api/run",{method:"POST",body:JSON.stringify({source:$("src").value,function:$("fn").value,secret_parameters:secret,public_parameters:pub})})).json()}
+  catch(e){r={ok:false,error:String(e)}}
+  $("res").hidden=false;$("err").textContent=r.error||"";$("log").textContent=r.log||"";
+  if(r.ok){
+    const[b,a]=diff(r.before,r.after);$("before").innerHTML=b;$("after").innerHTML=a;
+    $("badges").innerHTML=badge(r.changed?"Transformed":"No change made",r.changed?"ok":"neu")+badge(r.ir_valid?"IR valid":"IR invalid",r.ir_valid?"ok":"bad")+badge(r.ct_verified?"Static CT verification passed":"Not verified",r.ct_verified?"ok":"neu");
+  }else{$("badges").innerHTML="";$("before").textContent=$("after").textContent=""}
+  $("run").disabled=false;$("run").textContent="Run pass";
+}
+async function init(){
+  kernels=await(await fetch("/api/kernels")).json();
+  $("k").innerHTML=kernels.map(k=>`<option>${k.name}</option>`).join("");
+  $("k").onchange=pick;$("fn").oninput=renderParams;$("src").oninput=renderParams;$("run").onclick=run;pick();
+  const m=await(await fetch("/api/metrics")).json(),ks=m.kernels||{};
+  $("metrics").innerHTML="<tr><th>Kernel</th><th>Compared against</th><th>Cases</th><th>Mismatches</th><th>Status</th></tr>"+
+    Object.entries(ks).map(([n,v])=>`<tr><td>${n}</td><td>${v.transformed_source}</td><td>${v.cases}</td><td>${v.mismatches}</td><td class="${v.status==="PASS"?"ok":"bad"}">${v.status}</td></tr>`).join("");
+}
+init();
+</script>
+</body>
+</html>
