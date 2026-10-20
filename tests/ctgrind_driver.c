@@ -13,10 +13,16 @@
 #define VALGRIND_MAKE_MEM_UNDEFINED(addr, len) ((void)0)
 #endif
 
-/* Kernel function declarations */
+/* Weak fallback stubs so each kernel can be compiled independently */
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((weak)) uint8_t aes_sbox(uint8_t input) { (void)input; return 0; }
+__attribute__((weak)) int secret_memcmp(const unsigned char *a, const unsigned char *b, int n) { (void)a; (void)b; (void)n; return 0; }
+__attribute__((weak)) uint64_t mod_exp(uint64_t base, uint64_t secret_exp, uint64_t mod) { (void)base; (void)secret_exp; (void)mod; return 0; }
+#else
 uint8_t aes_sbox(uint8_t input);
 int secret_memcmp(const unsigned char *a, const unsigned char *b, int n);
 uint64_t mod_exp(uint64_t base, uint64_t secret_exp, uint64_t mod);
+#endif
 
 int main(int argc, char **argv) {
     const char *kernel = (argc > 1) ? argv[1] : "aes_sbox";
