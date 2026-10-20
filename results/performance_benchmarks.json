@@ -1,0 +1,40 @@
+{
+  "benchmark_suite": "Constant-Time Security Pass Performance Evaluation",
+  "compiler": "LLVM/Clang",
+  "optimization": "-O2",
+  "benchmarks": {
+    "aes_sbox": {
+      "type": "compiler_pass_transformed",
+      "metric": "linear_mask_scan_vs_cache_load",
+      "iterations": 5000000,
+      "baseline_seconds": 0.006577,
+      "constant_time_seconds": 0.60614,
+      "overhead_percentage": 9116.06,
+      "slowdown_factor": 92.16,
+      "correctness_mismatches": 0,
+      "ir_verification": "PASS"
+    },
+    "memcmp": {
+      "type": "reference_accumulator_scan",
+      "metric": "full_buffer_or_xor_vs_early_return",
+      "test_cases": 2005,
+      "baseline_seconds": 0.00012,
+      "constant_time_seconds": 0.000285,
+      "overhead_percentage": 137.5,
+      "slowdown_factor": 2.38,
+      "correctness_mismatches": 0,
+      "ir_verification": "PASS"
+    },
+    "mod_exp": {
+      "type": "reference_fixed_iterations_masking",
+      "metric": "fixed_64_iterations_vs_variable_montgomery_ladder",
+      "test_cases": 2007,
+      "baseline_seconds": 0.00084,
+      "constant_time_seconds": 0.00241,
+      "overhead_percentage": 186.9,
+      "slowdown_factor": 2.87,
+      "correctness_mismatches": 0,
+      "ir_verification": "PASS"
+    }
+  }
+}

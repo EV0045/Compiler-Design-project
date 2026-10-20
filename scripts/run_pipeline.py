@@ -27,6 +27,10 @@ def main():
     plugin = build_dir / "libConstantTimePass.so"
     if not plugin.exists():
         plugin = build_dir / "libConstantTimePass.dylib"
+    if not plugin.exists():
+        plugin = build_dir / "ConstantTimePass.dll"
+    if not plugin.exists():
+        plugin = build_dir / "libConstantTimePass.dll"
     config = Path("benchmarks/configs") / (source_file.stem + ".json")
     if not config.exists():
         print("Secrecy config not found:", config)

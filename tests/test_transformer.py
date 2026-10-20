@@ -5,10 +5,30 @@ from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-PLUGIN = PROJECT_ROOT / "build" / "libConstantTimePass.so"
+
+
+def find_plugin():
+    build_dir = PROJECT_ROOT / "build"
+    for candidate in [
+        build_dir / "libConstantTimePass.so",
+        build_dir / "libConstantTimePass.dylib",
+        build_dir / "ConstantTimePass.dll",
+        build_dir / "libConstantTimePass.dll",
+    ]:
+        if candidate.exists():
+            return candidate
+    return build_dir / "libConstantTimePass.so"
+
+
+PLUGIN = find_plugin()
 
 
 class TestConstantTimeTransformer(unittest.TestCase):
+
+    def setUp(self):
+        if not PLUGIN.exists():
+            self.skipTest(f"Plugin not found at {PLUGIN}. Build with cmake first.")
+
 
     def run_opt(self, source_code, config):
         with tempfile.TemporaryDirectory() as temp_dir:
